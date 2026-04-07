@@ -87,10 +87,7 @@
 
 
         const normalizeJan = (jan) => {
-            if (!jan) return "";
-            let s = jan.trim().replace(/\r/g, '');
-            s = s.replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
-            return s;
+            return stateMgr.normalizeJanValue(jan);
         };
         let lastAcceptedJan = null;
         let lastAcceptedAt = 0;
@@ -492,7 +489,7 @@
 
                 // Group for Picking Lists
                 if (!groupedPick[pickNo]) groupedPick[pickNo] = [];
-                groupedPick[pickNo].push({ jan, qty, status: 'PENDING' });
+                groupedPick[pickNo].push({ jan, qty, checkedQty: 0, status: 'PENDING' });
             });
 
             const updates = { injectList: aggregatedInject };

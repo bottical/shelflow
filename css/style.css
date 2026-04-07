@@ -308,6 +308,47 @@ input:focus {
     }
 }
 
+.status-partial {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.pick-feedback {
+    margin-top: 0.5rem;
+    min-height: 1.2rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+.pick-feedback.info { color: var(--text-muted); }
+.pick-feedback.success { color: var(--success); }
+.pick-feedback.error { color: var(--danger); }
+
+.verify-scanner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-right: 0.75rem;
+}
+.verify-scanner .scanner-status {
+    color: #cbd5e1;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.verify-scanner .scanner-result {
+    color: #fef3c7;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.verify-scanner video {
+    width: 150px;
+    height: 88px;
+    background: #020617;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    object-fit: cover;
+}
+
 /* Mobile Utils */
 @media (max-width: 768px) {
     header {
