@@ -17,6 +17,7 @@
         let lastRenderedPickingNo = null;
         let lastRenderedAllCompleted = false;
         let progressSummary = { total: 0, completed: 0 };
+        let progressRefreshTimer = null;
 
         const stateMgr = new StateManager(
             (state) => render(state),
@@ -58,6 +59,28 @@
             return '未着手';
         };
 
+        const findNextConsumableLineIndex = (lines, jan) => {
+            let hasSameJan = false;
+            for (let idx = 0; idx < lines.length; idx += 1) {
+                const line = lines[idx];
+                if (String(line?.jan || '') !== String(jan)) continue;
+                hasSameJan = true;
+                if (!getLineProgress(line).done) return { index: idx, hasSameJan };
+            }
+            return { index: -1, hasSameJan };
+        };
+
+        const buildOptimisticConsumedLine = (line, quantityVerification) => {
+            const { qty, checkedQty } = getLineProgress(line);
+            const nextCheckedQty = quantityVerification ? Math.min(qty, checkedQty + 1) : qty;
+            const nextStatus = nextCheckedQty >= qty ? 'DONE' : (nextCheckedQty > 0 ? 'PARTIAL' : 'PENDING');
+            return {
+                ...line,
+                checkedQty: nextCheckedQty,
+                status: nextStatus
+            };
+        };
+
         const focusForCurrentMode = (state) => {
             const currentUserState = state?.userStates?.[stateMgr.currentUserId] || {};
             const currentPickingNo = currentUserState.currentPickingNo;
@@ -65,7 +88,8 @@
                 listIdInput.focus();
                 return;
             }
-            const lines = stateMgr.currentPickList?.lines || [];
+            const remoteLines = stateMgr.currentPickList?.lines || [];
+            const lines = stateMgr.getMergedPickLines(currentPickingNo, remoteLines);
             const allCompleted = lines.length > 0 && lines.every((line) => getLineProgress(line).done);
             if (allCompleted) {
                 listIdInput.focus();
@@ -182,34 +206,70 @@
                 AudioManager.playErrorSound();
                 return;
             }
-            try {
-                const result = await stateMgr.consumePickByJan(currentPickingNo, jan);
-                if (result?.result === 'done') {
-                    showJanFeedback(`...${jan.slice(-4)} 完了`, 'success');
-                } else if (result?.result === 'partial') {
-                    AudioManager.playStartSound();
-                    const line = result.line || {};
-                    const checkedQty = Math.max(0, Number(line.checkedQty) || 0);
-                    const qty = Math.max(0, Number(line.qty) || 0);
-                    showJanFeedback(`...${jan.slice(-4)} OK (${checkedQty}/${qty})`, 'success');
-                } else if (result?.result === 'already_done') {
-                    AudioManager.playErrorSound();
-                    showJanFeedback('既に完了済みです', 'error');
-                } else {
-                    AudioManager.playErrorSound();
-                    showJanFeedback('このピッキングNo.の対象外です', 'error');
-                }
-                await refreshPickProgress();
-            } catch (e) {
-                console.error('consumeByJan failed:', e);
+            const cfg = getConfig();
+            const remoteLines = stateMgr.currentPickList?.lines || [];
+            const mergedLines = stateMgr.getMergedPickLines(currentPickingNo, remoteLines);
+            const matched = findNextConsumableLineIndex(mergedLines, jan);
+            if (matched.index < 0) {
                 AudioManager.playErrorSound();
-                showJanFeedback('JAN処理に失敗しました', 'error');
-            } finally {
+                showJanFeedback(matched.hasSameJan ? '既に完了済みです' : 'このピッキングNo.の対象外です', 'error');
                 if (janInput) {
                     janInput.value = '';
                     focusForCurrentMode(stateMgr.state);
                 }
+                return;
             }
+
+            const nextLine = buildOptimisticConsumedLine(mergedLines[matched.index], cfg.quantityVerification);
+            const opId = stateMgr.setOptimisticPickLine(currentPickingNo, matched.index, nextLine);
+
+            if (nextLine.status === 'DONE') {
+                showJanFeedback(`...${jan.slice(-4)} 完了`, 'success');
+            } else {
+                AudioManager.playStartSound();
+                const checkedQty = Math.max(0, Number(nextLine.checkedQty) || 0);
+                const qty = Math.max(0, Number(nextLine.qty) || 0);
+                showJanFeedback(`...${jan.slice(-4)} OK (${checkedQty}/${qty})`, 'success');
+            }
+
+            if (janInput) {
+                janInput.value = '';
+                focusForCurrentMode(stateMgr.state);
+            }
+
+            stateMgr.consumePickByJan(currentPickingNo, jan).then((result) => {
+                if (result?.result === 'done' || result?.result === 'partial') {
+                    const serverIndex = Number.isInteger(result?.index) ? result.index : matched.index;
+                    const serverLine = result?.line || nextLine;
+                    const optimisticProgress = getLineProgress(nextLine);
+                    const serverProgress = getLineProgress(serverLine);
+                    const optimisticStatus = nextLine?.status || (optimisticProgress.done ? 'DONE' : 'PARTIAL');
+                    const serverStatus = serverLine?.status || (serverProgress.done ? 'DONE' : (serverProgress.checkedQty > 0 ? 'PARTIAL' : 'PENDING'));
+                    const hasServerMismatch = optimisticProgress.checkedQty !== serverProgress.checkedQty || optimisticStatus !== serverStatus;
+
+                    if (hasServerMismatch) {
+                        stateMgr.clearOptimisticPickLine(currentPickingNo, matched.index, opId);
+                        const serverOpId = stateMgr.setOptimisticPickLine(currentPickingNo, serverIndex, serverLine);
+                        stateMgr.markOptimisticPickLineCommitted(currentPickingNo, serverIndex, serverOpId);
+                    } else {
+                        stateMgr.markOptimisticPickLineCommitted(currentPickingNo, matched.index, opId);
+                    }
+
+                    const optimisticMerged = stateMgr.getMergedPickLines(currentPickingNo, stateMgr.currentPickList?.lines || []);
+                    const allCompleted = optimisticMerged.length > 0 && optimisticMerged.every((line) => getLineProgress(line).done);
+                    scheduleRefreshPickProgress(allCompleted ? 120 : 500);
+                    return;
+                }
+                stateMgr.clearOptimisticPickLine(currentPickingNo, matched.index, opId);
+                AudioManager.playErrorSound();
+                showJanFeedback(result?.result === 'already_done' ? '既に完了済みです' : 'このピッキングNo.の対象外です', 'error');
+            }).catch((e) => {
+                console.error('consumeByJan failed:', e);
+                stateMgr.clearOptimisticPickLine(currentPickingNo, matched.index, opId);
+                AudioManager.playErrorSound();
+                showJanFeedback('JAN処理に失敗しました', 'error');
+                render(stateMgr.state || {});
+            });
         };
 
         navGuard.installBeforeUnloadGuard();
@@ -232,6 +292,14 @@
                 progressSummary = { total: 0, completed: 0 };
             }
             render(stateMgr.state || {});
+        };
+
+        const scheduleRefreshPickProgress = (delay = 500) => {
+            if (progressRefreshTimer) clearTimeout(progressRefreshTimer);
+            progressRefreshTimer = setTimeout(() => {
+                progressRefreshTimer = null;
+                refreshPickProgress();
+            }, delay);
         };
 
         const render = (state) => {
@@ -264,7 +332,8 @@
                 return;
             }
 
-            const lines = currentPickLines;
+            const lines = stateMgr.getMergedPickLines(currentPickingNo, currentPickLines || []);
+            const optimisticLineOps = stateMgr.localUiState.optimisticPickLineOps?.[String(currentPickingNo)] || {};
             const allCompleted = lines.length > 0 && lines.every((l) => getLineProgress(l).done);
             if (
                 lastRenderedPickingNo === currentPickingNo &&
@@ -288,6 +357,8 @@
                 const statusLabel = getStatusLabel(line);
 
                 const tr = document.createElement('tr');
+                const isOptimistic = !!optimisticLineOps[String(idx)];
+                tr.classList.toggle('pick-row-optimistic', isOptimistic);
                 tr.style.opacity = done ? 0.5 : 1;
                 if (done) tr.style.background = '#f8fafc';
 
@@ -301,7 +372,7 @@
                     </td>
                     <td style="padding:1rem;">
                         <span class="status-badge ${done ? 'status-done' : (statusLabel === 'PARTIAL' ? 'status-partial' : 'status-pending')}">
-                            ${statusLabel}
+                            ${statusLabel}${isOptimistic ? ' ・処理中' : ''}
                         </span>
                     </td>
                     <td style="padding:1rem;">
@@ -329,7 +400,7 @@
 
             try {
                 await stateMgr.completePickLine(currentPickingNo, Number(index));
-                await refreshPickProgress();
+                scheduleRefreshPickProgress(300);
             } catch (e) {
                 console.error('completeLine failed:', e);
                 AudioManager?.playErrorSound?.();
@@ -388,7 +459,7 @@
             try {
                 await stateMgr.resetUserPick(stateMgr.currentUserId);
                 alert('ピッキング作業をリセットしました（未完了の進捗もクリアされました）');
-                await refreshPickProgress();
+                scheduleRefreshPickProgress(150);
             } catch (e) {
                 console.error('resetPicking failed:', e);
                 AudioManager?.playErrorSound?.();
