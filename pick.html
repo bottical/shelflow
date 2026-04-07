@@ -93,6 +93,16 @@
         <aside class="sidebar">
             <h3 style="margin:0; font-size:1rem;">ピッキング開始</h3>
             <input type="text" id="listIdInput" placeholder="ピッキングNo.を入力..." autofocus>
+            <label style="display:flex; align-items:center; gap:0.5rem; font-weight:700; font-size:0.9rem;">
+                <input type="checkbox" id="pickModeToggle" style="width:auto;"> 検品モード
+            </label>
+            <label style="display:flex; align-items:center; gap:0.5rem; font-weight:700; font-size:0.9rem;">
+                <input type="checkbox" id="quantityVerificationToggle" style="width:auto;"> 数量検品
+            </label>
+            <div id="janInputWrap" class="hidden">
+                <input type="text" id="janInput" placeholder="JANをスキャン...">
+                <div id="janFeedback" class="pick-feedback"></div>
+            </div>
 
             <button id="resetPickingBtn" class="btn btn-outline"
                 style="width:100%; border-color: var(--danger); color: var(--danger); font-size: 0.8rem; margin-top: 0.5rem;">

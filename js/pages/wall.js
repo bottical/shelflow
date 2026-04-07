@@ -7,6 +7,12 @@
         const openSettingsBtn = document.getElementById('openSettingsBtn');
         const openOthersBtn = document.getElementById('openOthersBtn');
         const homeBtn = document.getElementById('homeBtn');
+        const verifyScannerControls = document.getElementById('verifyScannerControls');
+        const scannerToggleBtn = document.getElementById('scannerToggleBtn');
+        const cameraFacingSelect = document.getElementById('cameraFacingSelect');
+        const scannerStatusLabel = document.getElementById('scannerStatusLabel');
+        const scannerResultLabel = document.getElementById('scannerResultLabel');
+        const scannerPreview = document.getElementById('scannerPreview');
         
         const multiViewContainer = document.getElementById('multiViewContainer');
         const selectorViewContainer = document.getElementById('selectorViewContainer');
@@ -55,6 +61,12 @@
         let editTargetBay = null;
 
         let currentSingleBayId = null; // null means show selector
+        let scannerStream = null;
+        let scannerTimer = null;
+        let barcodeDetector = null;
+        let lastScannedJan = null;
+        let lastScannedAt = 0;
+        let scannerRunning = false;
 
         const stateMgr = new StateManager(
             (state) => {
@@ -167,6 +179,7 @@
         settingBays.addEventListener('change', () => refreshBaysRiskUi());
 
         saveSettingsBtn.addEventListener('click', async () => {
+            const currentConfig = stateMgr.state?.config || {};
             const newConfig = {
                 bays: parseInt(settingBays.value, 10) || 9,
                 viewMode: settingViewMode.value,
@@ -174,7 +187,9 @@
                 multiRows: parseInt(settingMultiRows.value, 10) || 3,
                 multiCols: parseInt(settingMultiCols.value, 10) || 3,
                 showOthers: document.getElementById('settingShowOthers').checked,
-                maxSplit: 6
+                maxSplit: 6,
+                pickMode: currentConfig.pickMode === 'VERIFY' ? 'VERIFY' : 'NORMAL',
+                quantityVerification: !!currentConfig.quantityVerification
             };
             const localMultiStartId = Math.max(1, parseInt(settingMultiStartId.value, 10) || 1);
             const localDisplayScale = ['S', 'M', 'L'].includes(settingDisplayScale.value) ? settingDisplayScale.value : 'M';
@@ -762,6 +777,128 @@
             document.body.appendChild(overlay);
         };
 
+        const getVerifyConfig = (state = stateMgr.state) => {
+            const cfg = state?.config || {};
+            return {
+                pickMode: cfg.pickMode === 'VERIFY' ? 'VERIFY' : 'NORMAL'
+            };
+        };
+
+        const setScannerStatus = (text) => {
+            if (scannerStatusLabel) scannerStatusLabel.textContent = text || '';
+        };
+
+        const setScannerResult = (text, isError = false) => {
+            if (!scannerResultLabel) return;
+            scannerResultLabel.textContent = text || '';
+            scannerResultLabel.style.color = isError ? '#fca5a5' : '#fef3c7';
+        };
+
+        const stopScanner = (options = {}) => {
+            const preserveStatus = !!options.preserveStatus;
+            scannerRunning = false;
+            if (scannerTimer) {
+                clearTimeout(scannerTimer);
+                scannerTimer = null;
+            }
+            if (scannerStream) {
+                scannerStream.getTracks().forEach((track) => track.stop());
+                scannerStream = null;
+            }
+            if (scannerPreview) {
+                scannerPreview.pause();
+                scannerPreview.srcObject = null;
+                scannerPreview.classList.add('hidden');
+            }
+            if (scannerToggleBtn) scannerToggleBtn.textContent = '📷 開始';
+            if (!preserveStatus) {
+                setScannerStatus('待機中');
+            }
+        };
+
+        const consumeScannedJan = async (jan) => {
+            const code = stateMgr.normalizeJanValue(jan);
+            if (!code) return;
+            const now = Date.now();
+            if (lastScannedJan === code && now - lastScannedAt < 800) return;
+            lastScannedJan = code;
+            lastScannedAt = now;
+
+            const currentUserState = stateMgr.state?.userStates?.[stateMgr.currentUserId] || {};
+            const listId = currentUserState.currentPickingNo;
+            if (!listId) {
+                setScannerResult('先にピッキングNo.を開始してください', true);
+                AudioManager.playErrorSound();
+                return;
+            }
+            try {
+                const result = await stateMgr.consumePickByJan(listId, code);
+                if (result?.result === 'done') {
+                    setScannerResult(`...${code.slice(-4)} 完了`);
+                    AudioManager.playStartSound();
+                } else if (result?.result === 'partial') {
+                    const line = result.line || {};
+                    setScannerResult(`...${code.slice(-4)} OK (${line.checkedQty}/${line.qty})`);
+                    AudioManager.playStartSound();
+                } else if (result?.result === 'already_done') {
+                    setScannerResult('既に完了済みです', true);
+                    AudioManager.playErrorSound();
+                } else {
+                    setScannerResult('このピッキングNo.の対象外です', true);
+                    AudioManager.playErrorSound();
+                }
+            } catch (error) {
+                console.error('consumeScannedJan failed', error);
+                setScannerResult('JAN処理に失敗しました', true);
+                AudioManager.playErrorSound();
+            }
+        };
+
+        const scanLoop = async () => {
+            if (!scannerRunning || !barcodeDetector || !scannerPreview || scannerPreview.readyState < 2) {
+                scannerTimer = setTimeout(scanLoop, 200);
+                return;
+            }
+            try {
+                const barcodes = await barcodeDetector.detect(scannerPreview);
+                if (Array.isArray(barcodes) && barcodes.length > 0) {
+                    await consumeScannedJan(barcodes[0]?.rawValue || '');
+                }
+            } catch (error) {
+                // no-op
+            }
+            scannerTimer = setTimeout(scanLoop, 120);
+        };
+
+        const startScanner = async () => {
+            if (scannerRunning) return;
+            if (!window.BarcodeDetector || !navigator.mediaDevices?.getUserMedia) {
+                setScannerStatus('この端末ではカメラ読取を利用できません');
+                return;
+            }
+            try {
+                barcodeDetector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
+                const facingMode = cameraFacingSelect?.value || 'environment';
+                scannerStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: facingMode } },
+                    audio: false
+                });
+                scannerPreview.srcObject = scannerStream;
+                scannerPreview.classList.remove('hidden');
+                await scannerPreview.play();
+                scannerRunning = true;
+                if (scannerToggleBtn) scannerToggleBtn.textContent = '🛑 停止';
+                setScannerStatus('読取中');
+                setScannerResult('');
+                scanLoop();
+            } catch (error) {
+                console.error('startScanner failed', error);
+                stopScanner({ preserveStatus: true });
+                setScannerStatus('カメラ起動に失敗しました');
+                setScannerResult('権限または端末設定を確認してください', true);
+            }
+        };
+
         const markSlotDone = async (slotKey, state, stateMgr) => {
             const currentUserState = state.userStates?.[stateMgr.currentUserId] || {};
             const listId = currentUserState.currentPickingNo;
@@ -1332,6 +1469,7 @@
             if (!state) return;
             updateInstructionBanner(state);
             const config = state.config || {};
+            const verifyConfig = getVerifyConfig(state);
             const deviceSettings = getDeviceWallSettings();
             const displayScale = ['S', 'M', 'L'].includes(deviceSettings.displayScale) ? deviceSettings.displayScale : 'M';
             const denseTextMode = deviceSettings.denseTextMode !== false;
@@ -1367,6 +1505,24 @@
                 rootEl.dataset.dense = denseTextMode && maxSplitInView >= 5 ? 'true' : 'false';
             }
             document.body.dataset.displayScale = displayScale;
+
+            if (verifyScannerControls) {
+                const canUseScanner = verifyConfig.pickMode === 'VERIFY';
+                verifyScannerControls.classList.toggle('hidden', !canUseScanner);
+                if (canUseScanner) {
+                    const supported = !!window.BarcodeDetector && !!navigator.mediaDevices?.getUserMedia;
+                    if (scannerToggleBtn) scannerToggleBtn.disabled = !supported;
+                    if (cameraFacingSelect) cameraFacingSelect.disabled = !supported;
+                    if (!supported) {
+                        setScannerStatus('この端末ではカメラ読取を利用できません');
+                    }
+                } else {
+                    stopScanner();
+                    if (scannerToggleBtn) scannerToggleBtn.disabled = false;
+                    if (cameraFacingSelect) cameraFacingSelect.disabled = false;
+                    setScannerResult('');
+                }
+            }
 
             if (!config.bays) {
                 showSetup(false);
@@ -1558,12 +1714,34 @@
             render(stateMgr.state);
         });
 
+        if (scannerToggleBtn) {
+            scannerToggleBtn.addEventListener('click', async () => {
+                if (scannerRunning) {
+                    stopScanner();
+                } else {
+                    await startScanner();
+                }
+            });
+        }
+
+        if (cameraFacingSelect) {
+            cameraFacingSelect.addEventListener('change', async () => {
+                if (!scannerRunning) return;
+                stopScanner();
+                await startScanner();
+            });
+        }
+
         document.querySelectorAll('.nav-link').forEach(link => {
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 const page = link.getAttribute('data-page');
                 guardedNavigate(page);
             });
+        });
+
+        window.addEventListener('beforeunload', () => {
+            stopScanner();
         });
     });
 })();

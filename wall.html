@@ -437,6 +437,16 @@
         <button id="backBtn" class="btn btn-outline hidden" style="padding:0.25rem 0.75rem; font-size:0.8rem; color:white; border-color:#334155; background:transparent;">＜ 戻る</button>
         <span id="wallTitle" style="font-size:1.2rem; color:white; font-weight:bold; flex:1; text-align:center;">間口選択</span>
         <div style="display:flex; gap:0.5rem; align-items:center;">
+            <div id="verifyScannerControls" class="verify-scanner hidden">
+                <button id="scannerToggleBtn" class="btn btn-outline" style="padding:0.25rem 0.6rem; font-size:0.75rem; color:white; border-color:#334155; background:transparent;">📷 開始</button>
+                <select id="cameraFacingSelect" style="width:auto; padding:0.25rem 0.4rem; border-radius:0.4rem; border:1px solid #334155; background:#0f172a; color:#fff;">
+                    <option value="environment">背面</option>
+                    <option value="user">前面</option>
+                </select>
+                <span id="scannerStatusLabel" class="scanner-status">待機中</span>
+                <span id="scannerResultLabel" class="scanner-result"></span>
+                <video id="scannerPreview" class="hidden" autoplay muted playsinline></video>
+            </div>
             <select id="userSelect" class="user-select" style="margin-right:0.5rem;">
                 <option value="user1">User 1</option>
                 <option value="user2">User 2</option>
