@@ -303,6 +303,7 @@
         };
 
         const render = (state) => {
+            progressSummary = state?.progressSummary || { total: 0, completed: 0 };
             updateProgressUi();
             updateUserSelectorUI();
             updateModeUI(state);
