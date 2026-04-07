@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ピッキングシェルフ - 投入モード</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#0f172a">
+    <style>
+        .sidebar {
+            width: 350px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            overflow-y: auto;
+        }
+
+        .main-view {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        .alert {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            font-weight: 700;
+            font-size: 0.875rem;
+        }
+
+        .alert.error {
+            background: #fef2f2;
+            color: var(--danger);
+            border: 1px solid #fecaca;
+        }
+
+        .alert.info {
+            background: #eff6ff;
+            color: var(--primary);
+            border: 1px solid #bfdbfe;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <div style="display:flex; align-items:center; gap:1rem;">
+            <h2 style="margin:0;">📥 投入モード</h2>
+            <select id="userSelect" class="user-select" style="margin-right:0.5rem;">
+                <option value="user1">User 1</option>
+                <option value="user2">User 2</option>
+                <option value="user3">User 3</option>
+                <option value="user4">User 4</option>
+            </select>
+            <span id="sessionDisplay"
+                style="font-size:0.8rem; background:#f1f5f9; padding:0.25rem 0.75rem; border-radius:99px; font-weight:600;"></span>
+        </div>
+        <div style="display:flex; gap:0.5rem;">
+            <button class="btn btn-outline nav-link" data-page="index.html">🏠 HOME</button>
+            <button class="btn btn-outline nav-link" data-page="wall.html">📱 Wall</button>
+            <button class="btn btn-outline nav-link" data-page="pick.html">ピッキング ➔</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <aside class="sidebar mobile-fullscreen">
+            <div class="card flex-column gap-1">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; font-size:1rem;">1. CSVファイル読込</h3>
+                    <button id="csvConfigBtn" class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;">⚙️ 設定</button>
+                </div>
+                <input type="file" id="csvFile" accept=".csv,.xlsx,.xls" style="font-size: 0.8rem;">
+                <button id="loadCsvBtn" class="btn btn-primary" style="width:100%;">インポート実行</button>
+            </div>
+
+            <div class="card flex-column gap-1">
+                <h3 style="margin:0; font-size:1rem; text-align: center;">商品スキャン</h3>
+                <input type="text" id="scanInput" placeholder="JANスキャン..." autocomplete="off"
+                    style="font-size: 1.5rem; padding: 1rem; text-align: center;">
+                <div id="scanMsg" class="alert hidden" style="text-align: center; font-size: 1.1rem; padding: 1.5rem;">
+                </div>
+            </div>
+
+            <div id="instructionPanel" class="card hidden"
+                style="background: #eff6ff; border-color: var(--primary); text-align: center; padding: 1.5rem; margin-top: 1rem;">
+                <p style="color:var(--primary); font-weight:800; font-size: 1.05rem; margin: 0 0 1rem;">
+                    📱 空き枠をタップしてください
+                </p>
+                <div style="background: white; border-radius: 0.5rem; padding: 1rem 1.25rem; margin-bottom: 1rem; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 800;">JAN</div>
+                    <div id="dashJan" style="font-size: 1.4rem; font-weight: 800; margin: 0.35rem 0 0.75rem; font-family: monospace; color: var(--text);">---</div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 800;">必要数</div>
+                    <div style="margin-top: 0.35rem; color: var(--primary);">
+                        <span id="dashQty" style="font-size: 2.2rem; font-weight: 900; line-height: 1;">0</span>
+                        <span style="font-size: 1rem; font-weight: 800;">個</span>
+                    </div>
+                </div>
+                <button id="cancelInjectBtn" class="btn btn-outline" style="width: 100%; border-color: #fca5a5; color: var(--danger); background: #fef2f2; padding: 0.9rem; font-size: 1rem; font-weight: 800; border-radius: 0.5rem;">
+                    ✖️ スキャンを取り消す
+                </button>
+            </div>
+
+            <div class="hide-on-mobile"
+                style="margin-top: auto; padding: 1rem; background: #f8fafc; border-radius: 0.5rem; font-size: 0.75rem; color: var(--text-muted);">
+                ※PC管理画面モード：CSVインポートと全体レイアウト表示が有効です。
+            </div>
+        </aside>
+
+        <main class="main-view hide-on-mobile">
+            <div id="bayGrid" class="bay-grid"></div>
+            <!-- BAY 10 (Others/Unallocated) -->
+            <div id="bay10Container" style="margin: 1.5rem;"></div>
+        </main>
+    </div>
+
+    <!-- CSV Config Modal (Hidden by default) -->
+    <div id="csvConfigModal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:2000;">
+        <div class="card" style="width: 90%; max-width: 400px; padding: 2rem;">
+            <h3 style="margin-top:0;">⚙️ CSV列マッピング設定</h3>
+            <div style="display:flex; flex-direction:column; gap:1rem;">
+                <!-- 互換性のため、実際のindexは-1して扱う -->
+                <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                    <input type="checkbox" id="csvSkipHeader" checked>
+                    <span>1行目をタイトルとしてスキップする</span>
+                </label>
+                <div>
+                    <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">ピッキングNo. 列番号 (左から)</label>
+                    <input type="number" id="csvColPick" min="1" value="1" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">JANコード 列番号 (左から)</label>
+                    <input type="number" id="csvColJan" min="1" value="2" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">数量 列番号 (左から)</label>
+                    <input type="number" id="csvColQty" min="1" value="3" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+                </div>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1.5rem;">
+                <button id="csvConfigCancel" class="btn btn-outline">キャンセル</button>
+                <button id="csvConfigSave" class="btn btn-primary">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK (Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+    <script src="js/firebase-config.js"></script>
+    <script src="js/state-manager.js"></script>
+    <script src="js/navigation-guard.js"></script>
+    <script src="js/audio-manager.js"></script>
+    <script src="js/pages/inject.js"></script>
+</body>
+
+</html>

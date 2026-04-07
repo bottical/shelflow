@@ -1,0 +1,24 @@
+{
+  "name": "ピッキングシェルフ WALL",
+  "short_name": "PickWall",
+  "start_url": "wall.html",
+  "scope": "/picking_shelf/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "description": "ピッキングシェルフのWALL画面をタブレット向けに表示するPWA設定です。",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

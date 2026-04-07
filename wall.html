@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ピッキングシェルフ - ウォール</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <style>
+        html {
+            min-height: 100%;
+            background: #eeeeee;
+        }
+        body.wall-mode {
+            /* --wall-scroll-buffer-px: 16px; */ /* 8px〜24pxの範囲で実機に合わせて調整 */
+            /* --wall-scroll-buffer: clamp(8px, var(--wall-scroll-buffer-px), 24px); */
+            background: #eeeeee;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: calc(100svh + var(--wall-scroll-buffer));
+            overflow-x: hidden;
+            overflow-y: auto;
+            overscroll-behavior-y: contain;
+        }
+        
+        /* WALL画面では基本的に文字選択させない */
+        body.wall-mode,
+        body.wall-mode * {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* ただし設定画面などの操作部品は例外的に選択・入力可能にする */
+        body.wall-mode input,
+        body.wall-mode textarea,
+        body.wall-mode select,
+        body.wall-mode button,
+        body.wall-mode .btn,
+        body.wall-mode .btn-round {
+            -webkit-user-select: auto;
+            user-select: auto;
+            -webkit-touch-callout: default;
+        }
+        
+        @supports (min-height: 100dvh) {
+            body.wall-mode {
+                min-height: calc(100dvh + var(--wall-scroll-buffer));
+            }
+        }
+        .wall-root {
+            min-height: 100svh;
+            display: flex;
+            flex-direction: column;
+        }
+        @supports (min-height: 100dvh) {
+            .wall-root {
+                min-height: 100dvh;
+            }
+        }
+        body.wall-mode .wall-root > .wall-grid,
+        body.wall-mode .wall-root > #selectorViewContainer,
+        body.wall-mode .wall-root > #singleViewContainer {
+            overflow: hidden !important;
+        }
+        .wall-scroll-hint {
+            position: fixed;
+            left: 50%;
+            top: calc(env(safe-area-inset-top, 0px) + 12px);
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.88);
+            color: #e2e8f0;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            z-index: 90;
+            pointer-events: none;
+            opacity: 1;
+            transition: opacity 0.35s ease;
+            max-width: min(90vw, 520px);
+            text-align: center;
+        }
+        .wall-scroll-hint.is-hidden {
+            opacity: 0;
+        }
+        .pwa-install-hint-slot {
+            display: none;
+        }
+        .wall-grid {
+            display: grid;
+            flex: 1;
+            gap: 10px;
+            padding: 10px;
+            /* Will be dynamically styled for columns/rows in JS */
+        }
+        .wall-root {
+            --wall-block-font-size: 2rem;
+            --wall-block-label-size: 0.5em;
+            --wall-block-qty-size: 1em;
+            --wall-block-padding: 8px;
+            --wall-header-size: 0.7rem;
+        }
+        .wall-root[data-display-scale="S"] {
+            --wall-block-font-size: 1.7rem;
+            --wall-block-label-size: 0.45em;
+            --wall-block-qty-size: 0.92em;
+            --wall-block-padding: 6px;
+            --wall-header-size: 0.64rem;
+        }
+        .wall-root[data-display-scale="L"] {
+            --wall-block-font-size: 2.25rem;
+            --wall-block-label-size: 0.56em;
+            --wall-block-qty-size: 1.06em;
+            --wall-block-padding: 10px;
+            --wall-header-size: 0.76rem;
+        }
+        .wall-root[data-dense="true"] {
+            --wall-block-font-size: clamp(1.2rem, 4vw, 1.8rem);
+            --wall-block-label-size: 0.4em;
+            --wall-block-qty-size: 0.88em;
+            --wall-block-padding: 4px;
+            --wall-header-size: 0.6rem;
+        }
+        .mobile-screen {
+            background: black;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            border: 3px solid #334155;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            /*margin-bottom: 80px;*/ /* OSのメニューバー等に被らないための下部保護余白 */
+            border-radius: 8px;
+            box-shadow: 0 6px 14px rgba(2, 6, 23, 0.45);
+        }
+        .wall-grid .mobile-screen {
+            margin-bottom: 0; /* マルチビュー(PC/タブレット)の際は下部余白をなくして敷き詰める */
+        }
+        .screen-header {
+            background: #1e293b;
+            padding: 0.25rem 0.5rem;
+            font-size: var(--wall-header-size);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: #94a3b8;
+            font-weight: 800;
+            flex-shrink: 0;
+            border-bottom: 2px solid rgba(148, 163, 184, 0.45);
+        }
+        .live-badge {
+            color: #22c55e;
+        }
+        .screen-body {
+            flex: 1 1 auto;
+            display: grid;
+            gap: 2px;
+            padding: 2px;
+            min-height: 0;
+            overflow: hidden;
+        }
+        
+        /* Dynamic grids for split counts (Max 6) */
+        .grid-split-1 { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
+        .grid-split-2-p { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+        .grid-split-2-l { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); }
+        .grid-split-3 { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+        .grid-split-4 { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+        .grid-split-5-p { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+        .grid-split-5-l { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+        .grid-split-6-p { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+        .grid-split-6-l { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+
+        .block {
+            background: #1a1a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: var(--wall-block-font-size);
+            font-weight: 900;
+            color: #ffffff; /* Bright white text */
+            border: 2px solid rgba(255, 255, 255, 0.95); /* 分割罫線をより明確に */
+            border-radius: 4px;
+            transition: 0.2s;
+            position: relative;
+            min-height: 0;
+            min-width: 0;
+            overflow: hidden;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .block-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-width: 0;
+            padding: var(--wall-block-padding);
+            gap: 4px;
+        }
+        .block-main-label,
+        .block-sub-label {
+            display: block;
+            max-width: 100%;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            line-height: 1;
+        }
+        .block-main-label {
+            font-size: var(--wall-block-label-size);
+            font-weight: 800;
+            opacity: 0.92;
+        }
+        .block-sub-label {
+            font-size: 0.34em;
+            opacity: 0.86;
+        }
+        .block-qty {
+            max-width: 100%;
+            min-width: 0;
+            line-height: 1;
+            font-size: var(--wall-block-qty-size);
+            font-weight: 900;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .block.is-dense .block-content {
+            gap: 2px;
+        }
+        .block.optimistic-pending {
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45), 0 0 16px rgba(56, 189, 248, 0.55);
+            filter: saturate(1.1);
+            animation: optimisticPulse 0.45s ease-in-out infinite alternate;
+        }
+        .block.optimistic-committed {
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24), 0 0 8px rgba(56, 189, 248, 0.22);
+        }
+        @keyframes optimisticPulse {
+            from { opacity: 0.88; }
+            to { opacity: 1; }
+        }
+        .block,
+        .block * {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+        .block.filled {
+            background: var(--pick-color);
+            color: white;
+            border-color: rgba(255, 255, 255, 0.95); /* 投入済みでも白罫線を維持 */
+            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.2);
+        }
+        .block.picking {
+            background: var(--pick-color);
+            color: white;
+            font-size: calc(var(--wall-block-font-size) * 1.5);
+            border-color: rgba(255, 255, 255, 0.95); /* ピッキング中も白罫線を維持 */
+            box-shadow: 0 0 20px var(--pick-color);
+            z-index: 10;
+            opacity: 1;
+        }
+        .block.picking-done {
+            background: black;
+            color: var(--pick-color);
+            border: 4px solid var(--pick-color); /* Overrides empty state border */
+            font-size: calc(var(--wall-block-font-size) * 1.5);
+            z-index: 5;
+            opacity: 1;
+        }
+        .block.pick-processing {
+            background: #1f2937;
+            color: #e2e8f0;
+            border: 3px solid #94a3b8;
+            font-size: calc(var(--wall-block-font-size) * 1.15);
+            opacity: 0.95;
+            z-index: 12;
+            box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.28), 0 0 18px rgba(148, 163, 184, 0.4);
+            animation: pickProcessingPulse 0.9s ease-in-out infinite;
+        }
+        .block.pick-processing::after {
+            content: '';
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #cbd5e1;
+            box-shadow: 0 0 0 rgba(203, 213, 225, 0.5);
+            animation: pickProcessingDot 1.1s ease-in-out infinite;
+        }
+        @keyframes pickProcessingPulse {
+            0% { opacity: 0.8; }
+            50% { opacity: 1; }
+            100% { opacity: 0.85; }
+        }
+        @keyframes pickProcessingDot {
+            0% {
+                transform: scale(0.8);
+                box-shadow: 0 0 0 0 rgba(203, 213, 225, 0.5);
+            }
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 8px rgba(203, 213, 225, 0);
+            }
+            100% {
+                transform: scale(0.8);
+                box-shadow: 0 0 0 0 rgba(203, 213, 225, 0);
+            }
+        }
+        .block.grayed-out {
+            background: #111;
+            color: #555;
+            border-color: rgba(255, 255, 255, 0.72); /* 対象外の黒背景でも境界が見えるように */
+            opacity: 0.4;
+            filter: grayscale(1);
+        }
+        .block.inject-ready {
+            border: 2px dashed var(--pick-color);
+            color: var(--pick-color);
+            cursor: pointer;
+            animation: pulse 1.5s infinite;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+        .config-overlay {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+        }
+        .btn-round {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid white;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+        }
+        .btn-round.disabled {
+            opacity: 0.2;
+            cursor: not-allowed;
+        }
+        .setup-needed {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 20;
+            padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+            min-height: 100svh;
+        }
+        @supports (min-height: 100dvh) {
+            .setup-needed {
+                min-height: 100dvh;
+            }
+        }
+        .btn-setup {
+            background: var(--primary);
+            border: none;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .home-btn {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 2rem;
+            backdrop-filter: blur(8px);
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 0.8rem;
+            font-weight: 700;
+            z-index: 100;
+        }
+        .selector-btn {
+            background: #1e293b;
+            color: white;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+            padding: 1.5rem 1rem;
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-align: center;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .selector-btn:hover {
+            background: #334155;
+        }
+    </style>
+</head>
+<body class="wall-mode">
+    <div class="wall-root">
+    <!-- Top Nav / Header for Wall -->
+    <div id="wallHeader" class="screen-header hidden" style="padding:1rem; display:flex; justify-content:space-between; align-items:center; background:#1e293b; flex-shrink: 0;">
+        <button id="backBtn" class="btn btn-outline hidden" style="padding:0.25rem 0.75rem; font-size:0.8rem; color:white; border-color:#334155; background:transparent;">＜ 戻る</button>
+        <span id="wallTitle" style="font-size:1.2rem; color:white; font-weight:bold; flex:1; text-align:center;">間口選択</span>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+            <select id="userSelect" class="user-select" style="margin-right:0.5rem;">
+                <option value="user1">User 1</option>
+                <option value="user2">User 2</option>
+                <option value="user3">User 3</option>
+                <option value="user4">User 4</option>
+            </select>
+            <button id="openOthersBtn" class="btn btn-primary hidden" style="padding:0.25rem 0.75rem; font-size:0.8rem; font-weight:bold; background:var(--warning); color:#fff; border:none;">📦 その他</button>
+            <button id="openSettingsBtn" class="btn btn-outline" style="padding:0.25rem 0.75rem; font-size:0.8rem; color:white; border-color:#334155; background:transparent;">⚙️ 設定</button>
+        </div>
+    </div>
+
+    <div id="instructionBanner" class="instruction-banner hidden"></div>
+
+    <!-- View Containers -->
+    <div id="multiViewContainer" class="wall-grid hidden" style="flex: 1 1 auto; min-height: 0; overflow-y: auto;"></div>
+    <div id="selectorViewContainer" class="hidden" style="flex: 1 1 auto; min-height: 0; padding: 1rem; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); align-content: start; overflow-y: auto;"></div>
+    <div id="singleViewContainer" class="hidden" style="flex: 1 1 auto; min-height: 0; padding: 2px; display: flex; flex-direction: column; overflow: hidden;"></div>
+
+    <div id="bay10-container" class="hidden" style="padding: 4px; flex-shrink: 0;"></div>
+    
+    <a href="javascript:void(0)" id="homeBtn" class="home-btn nav-link" data-page="index.html">🏠 HOME</a>
+    </div>
+
+    <div id="wallScrollHint" class="wall-scroll-hint hidden">少し下にスワイプすると表示領域が広がります</div>
+    <div id="pwaInstallHintSlot" class="pwa-install-hint-slot" data-pwa-install-hint-slot aria-hidden="true"></div>
+
+    <!-- Setup Overlay -->
+    <div id="setupOverlay" class="setup-needed hidden" style="z-index: 1000;">
+        <div class="card" style="width: 90%; max-width: 400px; max-height: 90vh; overflow-y: auto; background: var(--surface); color: var(--text);">
+            <h3 style="margin-top:0;">📱 Wall 初期設定</h3>
+            
+            <div class="flex-column gap-1">
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">総間口数 (No.1〜)</label>
+                    <input type="number" id="settingBays" min="1" max="100" value="9" style="margin-top:0.25rem;">
+                    <div id="settingBaysRiskNotice" class="hidden" style="margin-top:0.5rem; padding:0.75rem; border-radius:0.5rem; font-size:0.85rem; line-height:1.45;"></div>
+                </div>
+
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">表示モード</label>
+                    <select id="settingViewMode" style="width:100%; padding:0.75rem 1rem; border-radius:0.5rem; border:1px solid var(--border); margin-top:0.25rem;">
+                        <option value="single">個別表示 (スマホ向け)</option>
+                        <option value="multi">一覧表示 (PC/タブレット向け)</option>
+                    </select>
+                </div>
+
+                <div id="singleSettings">
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">画面の向き (個別表示時)</label>
+                    <select id="settingOrientation" style="width:100%; padding:0.75rem 1rem; border-radius:0.5rem; border:1px solid var(--border); margin-top:0.25rem;">
+                        <option value="portrait">縦表示 (Portrait)</option>
+                        <option value="landscape">横表示 (Landscape)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">表示サイズ</label>
+                    <select id="settingDisplayScale" style="width:100%; padding:0.75rem 1rem; border-radius:0.5rem; border:1px solid var(--border); margin-top:0.25rem;">
+                        <option value="S">S（小さめ）</option>
+                        <option value="M" selected>M（標準）</option>
+                        <option value="L">L（大きめ）</option>
+                    </select>
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top: 0.75rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" id="settingDenseTextMode" checked style="width:auto;"> 多分割時に文字を自動圧縮
+                    </label>
+                </div>
+
+                <div id="multiSettings" class="hidden">
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">一覧のレイアウト (行 × 列)</label>
+                    <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.25rem;">
+                        <input type="number" id="settingMultiRows" min="1" max="10" value="3" style="width:80px;"> 行 ×
+                        <input type="number" id="settingMultiCols" min="1" max="10" value="3" style="width:80px;"> 列
+                    </div>
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top: 1rem; display:block;">この端末の表示スタート間口 (No.)</label>
+                    <input type="number" id="settingMultiStartId" min="1" max="100" value="1" style="margin-top:0.25rem;">
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.5rem 0 0;">
+                        この値は端末ごとに保存されます。他のタブレットには影響しません。
+                    </p>
+                    
+                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top: 1rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" id="settingShowOthers" checked style="width:auto;"> 他ユーザーの状況を表示する
+                    </label>
+                </div>
+
+                <div>
+                    <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">
+                        全間口の一括分割数
+                    </label>
+                    <select id="settingBulkSplit" style="width:100%; padding:8px; border:1px solid #334155; border-radius:6px; background:#0f172a; color:white;">
+                        <option value="">変更しない</option>
+                        <option value="1">1 分割</option>
+                        <option value="2">2 分割</option>
+                        <option value="3">3 分割</option>
+                        <option value="4">4 分割</option>
+                        <option value="5">5 分割</option>
+                        <option value="6">6 分割</option>
+                    </select>
+                    <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">
+                        減らす場合は、末尾スロットが空の間口だけ可能な分だけ減らします
+                    </div>
+                </div>
+
+                <button id="saveSettingsBtn" class="btn btn-primary" style="width:100%; margin-top:1rem;">保存して開始</button>
+                <button id="closeSettingsBtn" class="btn btn-outline hidden" style="width:100%; margin-top:0.5rem;">キャンセル</button>
+                <hr style="border:0; border-top:1px solid var(--border); width: 100%; margin: 1rem 0 0.5rem 0;">
+                <a href="javascript:void(0)" class="btn btn-outline nav-link" data-page="index.html" style="width:100%; display:flex; align-items:center; justify-content:center; text-decoration:none; box-sizing:border-box;">🏠 HOME画面に戻る</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bay Edit Overlay -->
+    <div id="bayEditOverlay" class="setup-needed hidden" style="z-index: 1000;">
+        <div class="card" style="width: 80%; max-width: 300px; background: var(--surface); color: var(--text);">
+            <h3 id="editBayTitle" style="margin-top:0; text-align: center;">間口設定</h3>
+            <div class="flex-column gap-1">
+                <button id="bayAddSplitBtn" class="btn btn-primary">➕ 分割を増やす</button>
+                <button id="bayRemoveSplitBtn" class="btn btn-outline">➖ 分割を減らす</button>
+                <hr style="border:0; border-top:1px solid var(--border); width: 100%; margin: 0.5rem 0;">
+                <button id="bayResetBtn" class="btn btn-danger">🔄 間口をリセット</button>
+                <button id="bayEditCancelBtn" class="btn btn-outline" style="margin-top: 0.5rem;">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK (Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script>
+        (function () {
+            const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+            document.body.dataset.displayMode = isStandalone ? 'standalone' : 'browser';
+            if (!isStandalone) {
+                document.body.classList.add('is-browser-mode');
+                document.dispatchEvent(new CustomEvent('wall:pwa-browser-mode', {
+                    detail: {
+                        canRecommendInstall: true,
+                        hintSlotId: 'pwaInstallHintSlot'
+                    }
+                }));
+            }
+
+            const hintStorageKey = 'wallScrollHintDismissed';
+            const hintEl = document.getElementById('wallScrollHint');
+            if (!hintEl || localStorage.getItem(hintStorageKey) === '1') return;
+
+            hintEl.classList.remove('hidden');
+            const hideHint = () => {
+                hintEl.classList.add('is-hidden');
+                window.setTimeout(() => hintEl.classList.add('hidden'), 350);
+                localStorage.setItem(hintStorageKey, '1');
+            };
+
+            window.addEventListener('scroll', hideHint, { once: true, passive: true });
+            window.setTimeout(hideHint, 4500);
+        })();
+    </script>
+    <script src="js/firebase-config.js"></script>
+    <script src="js/state-manager.js"></script>
+    <script src="js/navigation-guard.js"></script>
+    <script src="js/audio-manager.js"></script>
+    <script src="js/pages/wall.js"></script>
+</body>
+</html>
