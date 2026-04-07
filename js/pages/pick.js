@@ -222,11 +222,11 @@
 
             const nextLine = buildOptimisticConsumedLine(mergedLines[matched.index], cfg.quantityVerification);
             const opId = stateMgr.setOptimisticPickLine(currentPickingNo, matched.index, nextLine);
-
+            AudioManager.playStartSound();
+            
             if (nextLine.status === 'DONE') {
                 showJanFeedback(`...${jan.slice(-4)} 完了`, 'success');
             } else {
-                AudioManager.playStartSound();
                 const checkedQty = Math.max(0, Number(nextLine.checkedQty) || 0);
                 const qty = Math.max(0, Number(nextLine.qty) || 0);
                 showJanFeedback(`...${jan.slice(-4)} OK (${checkedQty}/${qty})`, 'success');
