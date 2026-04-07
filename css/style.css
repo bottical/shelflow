@@ -322,6 +322,10 @@ input:focus {
 .pick-feedback.info { color: var(--text-muted); }
 .pick-feedback.success { color: var(--success); }
 .pick-feedback.error { color: var(--danger); }
+.pick-row-optimistic {
+    box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.25);
+    background: rgba(239, 246, 255, 0.75);
+}
 
 .verify-scanner {
     display: flex;

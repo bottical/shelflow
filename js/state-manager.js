@@ -44,6 +44,9 @@ function StateManager(onStateChange, onUserChange) {
         cancelledInjectRequestIds: {},
         optimisticSlots: {},
         optimisticPickCompletions: {},
+        optimisticPickLineOps: {},
+        // Reserved for future pick progress cache optimization (debounced refresh baseline).
+        optimisticPickProgressSummary: null,
         transientWallError: null,
         lastOpSeq: 0
     };
@@ -272,6 +275,10 @@ StateManager.prototype.createPickCompletionOpId = function () {
     return `pick-complete-op-${Date.now()}-${++this.localUiState.lastOpSeq}`;
 };
 
+StateManager.prototype.createPickLineOpId = function () {
+    return `pick-line-op-${Date.now()}-${++this.localUiState.lastOpSeq}`;
+};
+
 StateManager.prototype.setOptimisticPickCompletion = function (slotKey, listId) {
     if (!slotKey || !listId) return null;
     const active = this.localUiState.optimisticPickCompletions?.[slotKey];
@@ -325,6 +332,82 @@ StateManager.prototype.clearOptimisticPickCompletions = function (listId = null)
     });
 
     if (changed) this._notifyUiOnlyChange();
+};
+
+StateManager.prototype.setOptimisticPickLine = function (listId, index, nextLine) {
+    if (!listId || index === null || index === undefined || !nextLine) return null;
+    const normalizedListId = String(listId);
+    const normalizedIndex = String(index);
+    if (!this.localUiState.optimisticPickLineOps[normalizedListId]) {
+        this.localUiState.optimisticPickLineOps[normalizedListId] = {};
+    }
+    const opId = this.createPickLineOpId();
+    this.localUiState.optimisticPickLineOps[normalizedListId][normalizedIndex] = {
+        opId,
+        checkedQty: this._toSafeCheckedQty(nextLine, nextLine?.qty),
+        status: nextLine?.status === 'DONE' ? 'DONE' : (nextLine?.status === 'PARTIAL' ? 'PARTIAL' : 'PENDING'),
+        createdAt: Date.now(),
+        result: 'pending'
+    };
+    this._notifyUiOnlyChange();
+    return opId;
+};
+
+StateManager.prototype.markOptimisticPickLineCommitted = function (listId, index, opId) {
+    if (!listId || index === null || index === undefined) return;
+    const op = this.localUiState.optimisticPickLineOps?.[String(listId)]?.[String(index)];
+    if (!op) return;
+    if (opId && op.opId !== opId) return;
+    op.result = 'committed';
+    op.committedAt = Date.now();
+    this._notifyUiOnlyChange();
+};
+
+StateManager.prototype.clearOptimisticPickLine = function (listId, index, opId) {
+    if (!listId || index === null || index === undefined) return;
+    const normalizedListId = String(listId);
+    const normalizedIndex = String(index);
+    const listOps = this.localUiState.optimisticPickLineOps?.[normalizedListId];
+    const op = listOps?.[normalizedIndex];
+    if (!op) return;
+    if (opId && op.opId !== opId) return;
+    delete listOps[normalizedIndex];
+    if (!Object.keys(listOps).length) {
+        delete this.localUiState.optimisticPickLineOps[normalizedListId];
+    }
+    this._notifyUiOnlyChange();
+};
+
+StateManager.prototype.clearOptimisticPickLines = function (listId = null) {
+    if (listId === null || listId === undefined) {
+        if (!Object.keys(this.localUiState.optimisticPickLineOps || {}).length) return;
+        this.localUiState.optimisticPickLineOps = {};
+        this._notifyUiOnlyChange();
+        return;
+    }
+    const normalizedListId = String(listId);
+    if (!this.localUiState.optimisticPickLineOps?.[normalizedListId]) return;
+    delete this.localUiState.optimisticPickLineOps[normalizedListId];
+    this._notifyUiOnlyChange();
+};
+
+StateManager.prototype.getMergedPickLines = function (listId, remoteLines) {
+    const normalizedRemoteLines = this._normalizePickLines(Array.isArray(remoteLines) ? remoteLines : []);
+    if (!listId) return normalizedRemoteLines;
+    const listOps = this.localUiState.optimisticPickLineOps?.[String(listId)] || {};
+    if (!Object.keys(listOps).length) return normalizedRemoteLines;
+    return normalizedRemoteLines.map((line, idx) => {
+        const op = listOps[String(idx)];
+        if (!op) return line;
+        const qty = this._toSafeQty(line?.qty);
+        const checkedQty = this._toSafeCheckedQty({ ...line, checkedQty: op.checkedQty }, qty);
+        const status = checkedQty >= qty ? 'DONE' : (checkedQty > 0 ? 'PARTIAL' : 'PENDING');
+        return {
+            ...line,
+            checkedQty,
+            status
+        };
+    });
 };
 
 StateManager.prototype.isOptimisticPickCompletionActive = function (slotKey, state) {
@@ -430,6 +513,7 @@ StateManager.prototype._reconcileLocalUiStateWithRemote = function (remoteState)
     const remoteSlots = remoteState?.slots || {};
     const optimisticSlots = this.localUiState.optimisticSlots || {};
     const optimisticPickCompletions = this.localUiState.optimisticPickCompletions || {};
+    const optimisticPickLineOps = this.localUiState.optimisticPickLineOps || {};
     const remoteUserPending = remoteState?.userStates?.[this.currentUserId]?.injectPending;
     const remoteActivePick = remoteState?.userStates?.[this.currentUserId]?.activePick || {};
     const remotePickingNo = remoteState?.userStates?.[this.currentUserId]?.currentPickingNo || null;
@@ -489,6 +573,45 @@ StateManager.prototype._reconcileLocalUiStateWithRemote = function (remoteState)
 
         if (remoteDoneForSlot || remoteClearedForSlot || pendingTtlExpired || committedTtlExpired) {
             delete optimisticPickCompletions[slotKey];
+            changed = true;
+        }
+    });
+
+    Object.keys(optimisticPickLineOps).forEach((listId) => {
+        if (!remotePickingNo || String(listId) !== String(remotePickingNo)) {
+            delete optimisticPickLineOps[listId];
+            changed = true;
+            return;
+        }
+        const remoteLines = this.currentPickListId === String(listId)
+            ? (this.currentPickList?.lines || [])
+            : [];
+        const listOps = optimisticPickLineOps[listId] || {};
+        Object.keys(listOps).forEach((lineIndex) => {
+            const op = listOps[lineIndex];
+            if (!op) return;
+            const now = Date.now();
+            const createdAt = op.createdAt || 0;
+            const committedAt = op.committedAt || 0;
+            const remoteLine = remoteLines[Number(lineIndex)];
+            const remoteQty = this._toSafeQty(remoteLine?.qty);
+            const remoteCheckedQty = this._toSafeCheckedQty(remoteLine, remoteQty);
+            const remoteStatus = remoteCheckedQty >= remoteQty ? 'DONE' : (remoteCheckedQty > 0 ? 'PARTIAL' : 'PENDING');
+            const optimisticQty = this._toSafeCheckedQty({ checkedQty: op.checkedQty, status: op.status }, remoteQty);
+            const remoteCaughtUp = remoteLine && remoteCheckedQty >= optimisticQty && (
+                remoteStatus === 'DONE' ||
+                remoteStatus === op.status ||
+                (op.status === 'PARTIAL' && remoteStatus === 'DONE')
+            );
+            const committedTtlExpired = committedAt > 0 && (now - committedAt > 12000);
+            const createdTtlExpired = createdAt > 0 && (now - createdAt > 25000);
+            if (remoteCaughtUp || committedTtlExpired || createdTtlExpired) {
+                delete listOps[lineIndex];
+                changed = true;
+            }
+        });
+        if (!Object.keys(listOps).length) {
+            delete optimisticPickLineOps[listId];
             changed = true;
         }
     });
@@ -649,12 +772,15 @@ StateManager.prototype.subscribeToPickList = function (listId) {
 };
 
 StateManager.prototype.clearPickListSubscription = function () {
+    const oldListId = this.currentPickListId;
     if (this.unsubscribePickList) this.unsubscribePickList();
     this.unsubscribePickList = null;
     this.currentPickList = null;
     this.currentPickListId = null;
     this.currentPickListLoading = false;
     this.currentPickListNotFound = false;
+    if (oldListId) this.clearOptimisticPickLines(oldListId);
+    this.localUiState.optimisticPickProgressSummary = null;
 };
 
 StateManager.prototype.migrateToMultiUser = function (uid, oldData) {
@@ -1007,6 +1133,7 @@ StateManager.prototype.resetUserPick = function (userId) {
     }).then(() => {
         if (userId === this.currentUserId) this.clearPickListSubscription();
         this.clearOptimisticPickCompletions(oldListId);
+        this.clearOptimisticPickLines(oldListId);
         this.clearTransientWallError();
     }).catch((error) => {
         this._logFirestoreError('resetUserPick', error, uid);
@@ -1034,6 +1161,7 @@ StateManager.prototype.cancelAllPicks = function (extraUpdates = {}) {
     }).then(() => {
         this.clearPickListSubscription();
         this.clearOptimisticPickCompletions();
+        this.clearOptimisticPickLines();
         this.clearTransientWallError();
     }).catch((error) => {
         this._logFirestoreError('cancelAllPicks', error, uid);
@@ -1154,6 +1282,10 @@ StateManager.prototype.startPicking = function (listId, activePickData) {
 
         transaction.update(docRef, updates);
     }).then(() => {
+        const previousListId = this.currentPickListId;
+        if (previousListId && String(previousListId) !== String(listId)) {
+            this.clearOptimisticPickLines(previousListId);
+        }
         this.subscribeToPickList(listId);
     }).catch((error) => {
         this._logFirestoreError('startPicking', error, uid);
@@ -1207,6 +1339,7 @@ StateManager.prototype.resetPreserveConfig = function () {
     const uid = this.user.uid;
     return this._deleteAllPickListDocs(uid).then(() => this._getStateDocRef(uid).set(nextState)).then(() => {
         this.clearPickListSubscription();
+        this.clearOptimisticPickLines();
     }).catch((error) => {
         this._logFirestoreError('resetPreserveConfig', error, uid);
         throw error;
@@ -1218,6 +1351,7 @@ StateManager.prototype.reset = function () {
     const uid = this.user.uid;
     return this._deleteAllPickListDocs(uid).then(() => this.initializeNewSession(uid)).then(() => {
         this.clearPickListSubscription();
+        this.clearOptimisticPickLines();
     });
 };
 
