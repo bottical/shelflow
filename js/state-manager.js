@@ -14,6 +14,8 @@ function StateManager(onStateChange, onUserChange) {
     this.currentPickListNotFound = false;
     this.migrationInFlight = false;
     this.migrationCompleted = false;
+    this.progressSummaryBackfillInFlight = false;
+    this.progressSummaryBackfillCompleted = false;
 
     if (!firebase.apps.length) {
         firebase.initializeApp(firebaseConfig);
@@ -29,6 +31,8 @@ function StateManager(onStateChange, onUserChange) {
         if (user) {
             this.migrationInFlight = false;
             this.migrationCompleted = false;
+            this.progressSummaryBackfillInFlight = false;
+            this.progressSummaryBackfillCompleted = false;
             this.subscribeToState(user.uid);
         } else {
             if (this.unsubscribeState) this.unsubscribeState();
@@ -45,8 +49,6 @@ function StateManager(onStateChange, onUserChange) {
         optimisticSlots: {},
         optimisticPickCompletions: {},
         optimisticPickLineOps: {},
-        // Reserved for future pick progress cache optimization (debounced refresh baseline).
-        optimisticPickProgressSummary: null,
         transientWallError: null,
         lastOpSeq: 0
     };
@@ -718,6 +720,7 @@ StateManager.prototype.subscribeToState = function (uid) {
         if (doc.exists) {
             const data = doc.data();
             this._migrateLegacyPickListsIfNeeded(uid, data);
+            this._backfillProgressSummaryIfNeeded(uid, data);
             // Migrate old state if needed
             if (!data.userStates) {
                 this.migrateToMultiUser(uid, data);
@@ -735,6 +738,39 @@ StateManager.prototype.subscribeToState = function (uid) {
         }
     }, (error) => {
         this._logFirestoreError('subscribeToState', error, uid);
+    });
+};
+
+StateManager.prototype._backfillProgressSummaryIfNeeded = function (uid, data) {
+    if (this.progressSummaryBackfillCompleted || this.progressSummaryBackfillInFlight) return;
+    const hasProgressSummary =
+        !!data?.progressSummary &&
+        Number.isFinite(Number(data.progressSummary.total)) &&
+        Number.isFinite(Number(data.progressSummary.completed));
+    if (hasProgressSummary) {
+        this.progressSummaryBackfillCompleted = true;
+        return;
+    }
+    if (data?.pickLists) return;
+
+    this.progressSummaryBackfillInFlight = true;
+    this._getPickListCollectionRef(uid).get().then((snapshot) => {
+        let total = 0;
+        let completed = 0;
+        snapshot.forEach((doc) => {
+            total += 1;
+            if (this._isPickListCompleted(doc.data()?.lines || [])) completed += 1;
+        });
+        return this._getStateDocRef(uid).update({
+            progressSummary: { total, completed },
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+    }).then(() => {
+        this.progressSummaryBackfillCompleted = true;
+    }).catch((error) => {
+        this._logFirestoreError('_backfillProgressSummaryIfNeeded', error, uid);
+    }).finally(() => {
+        this.progressSummaryBackfillInFlight = false;
     });
 };
 
@@ -780,7 +816,6 @@ StateManager.prototype.clearPickListSubscription = function () {
     this.currentPickListLoading = false;
     this.currentPickListNotFound = false;
     if (oldListId) this.clearOptimisticPickLines(oldListId);
-    this.localUiState.optimisticPickProgressSummary = null;
 };
 
 StateManager.prototype.migrateToMultiUser = function (uid, oldData) {
