@@ -16,9 +16,6 @@
 
         let lastRenderedPickingNo = null;
         let lastRenderedAllCompleted = false;
-        let progressSummary = { total: 0, completed: 0 };
-        let progressRefreshTimer = null;
-
         const stateMgr = new StateManager(
             (state) => render(state),
             (user) => {
@@ -149,7 +146,6 @@
                 listIdInput.value = '';
                 currentListTitle.innerHTML = `<span style="color: var(--danger);">エラー：見つかりません (${id})</span>`;
                 pickTable.innerHTML = `<tr><td colspan="5" style="padding:3rem; text-align:center; color:var(--danger); font-size:1.2rem; font-weight:bold;">入力されたピッキングNo.「${id}」が存在しません。</td></tr>`;
-                await refreshPickProgress();
                 return;
             }
             listIdInput.value = '';
@@ -160,7 +156,6 @@
             if (allCompleted) AudioManager.playErrorSound();
             else AudioManager.playStartSound();
             await stateMgr.startPicking(id, newActivePick);
-            await refreshPickProgress();
             focusForCurrentMode(stateMgr.state);
         };
 
@@ -255,9 +250,6 @@
                         stateMgr.markOptimisticPickLineCommitted(currentPickingNo, matched.index, opId);
                     }
 
-                    const optimisticMerged = stateMgr.getMergedPickLines(currentPickingNo, stateMgr.currentPickList?.lines || []);
-                    const allCompleted = optimisticMerged.length > 0 && optimisticMerged.every((line) => getLineProgress(line).done);
-                    scheduleRefreshPickProgress(allCompleted ? 120 : 500);
                     return;
                 }
                 stateMgr.clearOptimisticPickLine(currentPickingNo, matched.index, opId);
@@ -274,7 +266,8 @@
 
         navGuard.installBeforeUnloadGuard();
 
-        const updateProgressUi = () => {
+        const updateProgressUi = (summary) => {
+            const progressSummary = summary || { total: 0, completed: 0 };
             const total = Number(progressSummary?.total) || 0;
             const completed = Number(progressSummary?.completed) || 0;
             if (!pickProgressCard || !pickProgressText || !pickProgressFill) return;
@@ -284,27 +277,9 @@
             pickProgressCard.classList.toggle('hidden', total === 0);
         };
 
-        const refreshPickProgress = async () => {
-            try {
-                progressSummary = await stateMgr.getPickListProgressSummary();
-            } catch (error) {
-                console.error('全体進捗の取得に失敗しました:', error);
-                progressSummary = { total: 0, completed: 0 };
-            }
-            render(stateMgr.state || {});
-        };
-
-        const scheduleRefreshPickProgress = (delay = 500) => {
-            if (progressRefreshTimer) clearTimeout(progressRefreshTimer);
-            progressRefreshTimer = setTimeout(() => {
-                progressRefreshTimer = null;
-                refreshPickProgress();
-            }, delay);
-        };
-
         const render = (state) => {
-            progressSummary = state?.progressSummary || { total: 0, completed: 0 };
-            updateProgressUi();
+            const progressSummary = state?.progressSummary || { total: 0, completed: 0 };
+            updateProgressUi(progressSummary);
             updateUserSelectorUI();
             updateModeUI(state);
             const cfg = getConfig(state);
@@ -401,7 +376,6 @@
 
             try {
                 await stateMgr.completePickLine(currentPickingNo, Number(index));
-                scheduleRefreshPickProgress(300);
             } catch (e) {
                 console.error('completeLine failed:', e);
                 AudioManager?.playErrorSound?.();
@@ -460,7 +434,6 @@
             try {
                 await stateMgr.resetUserPick(stateMgr.currentUserId);
                 alert('ピッキング作業をリセットしました（未完了の進捗もクリアされました）');
-                scheduleRefreshPickProgress(150);
             } catch (e) {
                 console.error('resetPicking failed:', e);
                 AudioManager?.playErrorSound?.();
@@ -484,6 +457,5 @@
         });
 
         listIdInput.focus();
-        refreshPickProgress();
     });
 })();

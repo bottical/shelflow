@@ -751,20 +751,18 @@ StateManager.prototype._backfillProgressSummaryIfNeeded = function (uid, data) {
         this.progressSummaryBackfillCompleted = true;
         return;
     }
-    if (data?.pickLists) return;
+    if (data?.pickLists === undefined) return;
+    const legacyPickLists = data?.pickLists || {};
+    const entries = Object.entries(legacyPickLists);
+    const total = entries.length;
+    const completed = entries.reduce((acc, [, lines]) => (
+        acc + (this._isPickListCompleted(this._normalizePickLines(lines || [])) ? 1 : 0)
+    ), 0);
 
     this.progressSummaryBackfillInFlight = true;
-    this._getPickListCollectionRef(uid).get().then((snapshot) => {
-        let total = 0;
-        let completed = 0;
-        snapshot.forEach((doc) => {
-            total += 1;
-            if (this._isPickListCompleted(doc.data()?.lines || [])) completed += 1;
-        });
-        return this._getStateDocRef(uid).update({
-            progressSummary: { total, completed },
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+    this._getStateDocRef(uid).update({
+        progressSummary: { total, completed },
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     }).then(() => {
         this.progressSummaryBackfillCompleted = true;
     }).catch((error) => {
@@ -927,6 +925,10 @@ StateManager.prototype.initializeNewSession = function (uid) {
         splits,
         injectList: {},
         janIndex: {},
+        progressSummary: {
+            total: 0,
+            completed: 0
+        },
         userStates: {
             user1: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
             user2: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
@@ -1001,6 +1003,12 @@ StateManager.prototype.replaceAllPickLists = async function (groupedPick) {
     await this._deleteAllPickListDocs(uid);
     const entries = Object.entries(groupedPick || {});
     await this._writePickListEntriesInChunks(uid, entries);
+    await this.update({
+        progressSummary: {
+            total: entries.length,
+            completed: 0
+        }
+    });
 };
 
 StateManager.prototype.loadPickList = async function (listId) {
@@ -1042,19 +1050,15 @@ StateManager.prototype._normalizePickLines = function (lines) {
 };
 
 StateManager.prototype.getPickListProgressSummary = async function () {
-    if (!this.user) return { total: 0, completed: 0 };
-    const snapshot = await this._getPickListCollectionRef(this.user.uid).get();
-    let total = 0;
-    let completed = 0;
+    return this.state?.progressSummary || { total: 0, completed: 0 };
+};
 
-    snapshot.forEach((doc) => {
-        total += 1;
-        const lines = this._normalizePickLines(doc.data()?.lines || []);
-        const allDone = lines.length > 0 && lines.every((line) => this._isLineCompleted(line));
-        if (allDone) completed += 1;
-    });
-
-    return { total, completed };
+StateManager.prototype._applyProgressSummaryDelta = function (stateUpdates, beforeLines, afterLines) {
+    const beforeDone = this._isPickListCompleted(beforeLines || []);
+    const afterDone = this._isPickListCompleted(afterLines || []);
+    if (beforeDone === afterDone) return;
+    const delta = afterDone ? 1 : -1;
+    stateUpdates['progressSummary.completed'] = firebase.firestore.FieldValue.increment(delta);
 };
 
 StateManager.prototype._hasActiveSkuInSlot = function (slotData) {
@@ -1129,9 +1133,11 @@ StateManager.prototype._applyResetLogic = async function (userId, uid, data, upd
         const pickListDoc = transaction ? await transaction.get(pickListRef) : await pickListRef.get();
         if (pickListDoc.exists) {
             const lines = this._normalizePickLines(pickListDoc.data()?.lines || []);
-            const allDone = lines.length > 0 && lines.every((l) => this._isLineCompleted(l));
-            if (!allDone) {
+            if (lines.length > 0) {
                 const nextLines = lines.map((l) => ({ ...l, checkedQty: 0, status: 'PENDING' }));
+                const hasChanged = nextLines.some((line, idx) => (
+                    line.checkedQty !== lines[idx].checkedQty || line.status !== lines[idx].status
+                ));
                 if (transaction) {
                     transaction.update(pickListRef, {
                         lines: nextLines,
@@ -1143,6 +1149,7 @@ StateManager.prototype._applyResetLogic = async function (userId, uid, data, upd
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 }
+                if (hasChanged) this._applyProgressSummaryDelta(updates, lines, nextLines);
             }
         }
     }
@@ -1400,6 +1407,7 @@ StateManager.prototype.completePickLine = function (listId, index) {
         if (!listDoc.exists || !stateDoc.exists) return;
         const lines = this._normalizePickLines(listDoc.data()?.lines || []);
         if (!lines[index] || this._isLineCompleted(lines[index])) return;
+        const beforeLines = [...lines];
         const targetQty = this._toSafeQty(lines[index].qty);
         lines[index] = { ...lines[index], checkedQty: targetQty, status: 'DONE' };
         transaction.update(listRef, {
@@ -1410,10 +1418,12 @@ StateManager.prototype.completePickLine = function (listId, index) {
         const data = stateDoc.data() || {};
         const janIndex = data.janIndex || {};
         const activePick = this._buildActivePickFromLines(listId, lines, janIndex);
-        transaction.update(stateRef, {
+        const stateUpdates = {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
+        this._applyProgressSummaryDelta(stateUpdates, beforeLines, lines);
+        transaction.update(stateRef, stateUpdates);
     });
 };
 
@@ -1428,6 +1438,7 @@ StateManager.prototype.completePickBySlot = function (listId, slotKey) {
         const data = stateDoc.data() || {};
         const janIndex = data.janIndex || {};
         const lines = this._normalizePickLines(listDoc.data()?.lines || []);
+        const beforeLines = [...lines];
         let changed = false;
         const nextLines = lines.map((line) => {
             if (this._isLineCompleted(line)) return line;
@@ -1443,10 +1454,12 @@ StateManager.prototype.completePickBySlot = function (listId, slotKey) {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         const activePick = this._buildActivePickFromLines(listId, nextLines, janIndex);
-        transaction.update(stateRef, {
+        const stateUpdates = {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
+        this._applyProgressSummaryDelta(stateUpdates, beforeLines, nextLines);
+        transaction.update(stateRef, stateUpdates);
     });
 };
 
@@ -1508,6 +1521,11 @@ StateManager.prototype._isLineCompleted = function (line) {
     return checkedQty >= qty;
 };
 
+StateManager.prototype._isPickListCompleted = function (lines) {
+    const normalizedLines = this._normalizePickLines(lines || []);
+    return normalizedLines.length > 0 && normalizedLines.every((line) => this._isLineCompleted(line));
+};
+
 StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
     if (!this.user || !listId || !jan) return Promise.reject("Not authenticated");
     const uid = this.user.uid;
@@ -1527,6 +1545,7 @@ StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
             ? forceQuantityVerification
             : !!config.quantityVerification;
         const lines = this._normalizePickLines(listDoc.data()?.lines || []);
+        const beforeLines = [...lines];
 
         const matchedIndexes = [];
         let hasSameJan = false;
@@ -1564,10 +1583,12 @@ StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
         });
 
         const activePick = this._buildActivePickFromLines(listId, nextLines, janIndex);
-        transaction.update(stateRef, {
+        const stateUpdates = {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
+        this._applyProgressSummaryDelta(stateUpdates, beforeLines, nextLines);
+        transaction.update(stateRef, stateUpdates);
 
         return {
             result: nextStatus === 'DONE' ? 'done' : 'partial',
