@@ -212,9 +212,21 @@
         const detectSlotImportColumnIndex = (headerRow) => {
             const headers = (headerRow || []).map(normalizeHeaderKey);
             const findIndex = (candidates) => headers.findIndex((h) => candidates.includes(h));
-            const bayCol = findIndex(['間口no', '間口番号', '間口']);
-            const logicalCol = findIndex(['論理間口no', '論理間口番号', '論理間口']);
-            const janCol = findIndex(['jan', 'jancode', 'janコード']);
+
+            const bayCol = findIndex([
+                '間口no', '間口番号', '間口',
+                'bay_no', 'bayno', 'bay'
+            ]);
+
+            const logicalCol = findIndex([
+                '論理間口no', '論理間口番号', '論理間口',
+                'logical_slot_no', 'logicalslotno', 'logicalslot'
+            ]);
+
+            const janCol = findIndex([
+                'jan', 'jancode', 'janコード'
+            ]);
+
             if (bayCol < 0 || logicalCol < 0 || janCol < 0) return null;
             return { bayCol, logicalCol, janCol };
         };
@@ -776,7 +788,7 @@
                 }
                 readRows++;
                 if (!Number.isInteger(maxSplit) || logicalNo > maxSplit) {
-                    invalidRows.push(`行${lineNo}: 間口No.${bayNo} / 論理間口No.${logicalNo} が不正`);
+                    invalidRows.push(`行${lineNo}: 間口No.${bayNo} / 詳細間口No.${logicalNo} が不正`);
                     return;
                 }
                 if (!injectJanSet.has(jan)) {
@@ -871,7 +883,7 @@
                 });
             } catch (error) {
                 console.error('間口配置インポートの解析に失敗しました:', error);
-                alert('インポートファイルを解析できませんでした\n必要列（間口No / 論理間口No / JAN）を確認してください');
+                alert('インポートファイルを解析できませんでした\n必要列（間口No / 詳細間口No / JAN）を確認してください');
             }
         });
 
