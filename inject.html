@@ -79,6 +79,18 @@
             </div>
 
             <div class="card flex-column gap-1">
+                <h3 style="margin:0; font-size:1rem;">2. 間口配置インポート / エクスポート</h3>
+                <input type="file" id="slotCsvFile" accept=".csv,.xlsx,.xls" style="font-size: 0.8rem;">
+                <button id="importSlotLayoutBtn" class="btn btn-primary" style="width:100%;">間口配置をインポート</button>
+                <button id="exportSlotLayoutBtn" class="btn btn-outline" style="width:100%;">現在の間口配置をエクスポート</button>
+                <div id="slotImportHints" class="import-hint-list" style="font-size: 0.75rem;"></div>
+                <div class="import-hint-list" style="font-size: 0.75rem;">
+                    <p>現在の配置情報をそのまま出力します</p>
+                    <p>数量は参考値として含まれます</p>
+                </div>
+            </div>
+
+            <div class="card flex-column gap-1">
                 <h3 style="margin:0; font-size:1rem; text-align: center;">商品スキャン</h3>
                 <input type="text" id="scanInput" placeholder="JANスキャン..." autocomplete="off"
                     style="font-size: 1.5rem; padding: 1rem; text-align: center;">
@@ -116,6 +128,53 @@
             <!-- BAY 10 (Others/Unallocated) -->
             <div id="bay10Container" style="margin: 1.5rem;"></div>
         </main>
+    </div>
+
+    <div id="slotImportPreviewModal" class="import-modal-overlay hidden">
+        <div class="import-modal">
+            <h3 id="slotImportPreviewTitle" style="margin-top:0;">間口配置インポート確認</h3>
+            <div class="import-note-block">
+                <p>このインポートは、現在の間口配置を上書きします。</p>
+                <p>数量はインポートファイルからは復元せず、現在のピッキングリストから反映します。</p>
+            </div>
+            <div id="slotImportPreviewSummary" class="import-summary-grid"></div>
+            <details>
+                <summary>対象外JAN一覧</summary>
+                <div id="slotImportPreviewOutOfScope" class="import-detail-list"></div>
+            </details>
+            <details>
+                <summary>重複JAN一覧（同一間口重複含む）</summary>
+                <div id="slotImportPreviewDuplicateJan" class="import-detail-list"></div>
+            </details>
+            <details>
+                <summary>不正データ一覧</summary>
+                <div id="slotImportPreviewInvalidRows" class="import-detail-list"></div>
+            </details>
+            <div class="import-note-block" style="margin-top: 1rem;">
+                <p>反映すると、現在の間口配置はインポート結果で全置換されます。</p>
+                <p>インポート結果に含まれない既存配置は解除されます。</p>
+            </div>
+            <div class="import-modal-actions">
+                <button id="slotImportPreviewCancelBtn" class="btn btn-outline">キャンセル</button>
+                <button id="slotImportPreviewProceedBtn" class="btn btn-primary">上書き確認へ進む</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="slotImportConfirmModal" class="import-modal-overlay hidden">
+        <div class="import-modal">
+            <h3 style="margin-top:0;">現在の間口配置を上書きしますか？</h3>
+            <div class="import-note-block">
+                <p>この操作を実行すると、現在の間口配置はインポート結果で全置換されます。</p>
+                <p>現在配置されているJANのうち、インポート結果に含まれないものは解除されます。</p>
+                <p>この操作は取り消せません。よろしいですか？</p>
+            </div>
+            <div id="slotImportConfirmSummary" class="import-summary-grid"></div>
+            <div class="import-modal-actions">
+                <button id="slotImportConfirmBackBtn" class="btn btn-outline">戻る</button>
+                <button id="slotImportConfirmApplyBtn" class="btn btn-danger">上書きして反映</button>
+            </div>
+        </div>
     </div>
 
     <!-- CSV Config Modal (Hidden by default) -->

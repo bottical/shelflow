@@ -924,6 +924,59 @@ StateManager.prototype._buildJanIndexFromSlots = function (slots) {
     return janIndex;
 };
 
+StateManager.prototype.replaceSlotLayout = function (nextSlots) {
+    if (!this.user || !this.state) return Promise.reject("Not authenticated");
+    const uid = this.user.uid;
+    const currentUserId = this.currentUserId;
+    const normalizedSlots = {};
+    Object.entries(nextSlots || {}).forEach(([slotKey, slot]) => {
+        const rawSkus = Array.isArray(slot?.skus)
+            ? slot.skus
+            : (slot?.sku ? [slot.sku] : []);
+        const skus = rawSkus
+            .map((jan) => this.normalizeJanValue(jan))
+            .filter((jan) => !!jan);
+        if (skus.length === 0) return;
+        normalizedSlots[slotKey] = { skus: [...skus] };
+    });
+    const nextJanIndex = this._buildJanIndexFromSlots(normalizedSlots);
+
+    return this.db.runTransaction(async (transaction) => {
+        const docRef = this._getStateDocRef(uid);
+        const doc = await transaction.get(docRef);
+        if (!doc.exists) {
+            throw new Error('state-not-found');
+        }
+        const data = doc.data() || {};
+        const userStates = data.userStates || {};
+        const updates = {
+            slots: normalizedSlots,
+            janIndex: nextJanIndex,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const userIds = Object.keys(userStates);
+        for (const userId of userIds) {
+            const listId = userStates?.[userId]?.currentPickingNo;
+            if (!listId) {
+                updates[`userStates.${userId}.activePick`] = {};
+                continue;
+            }
+            const pickListDoc = await transaction.get(this._getPickListDocRef(uid, listId));
+            const currentLines = pickListDoc.exists ? (pickListDoc.data()?.lines || []) : [];
+            updates[`userStates.${userId}.activePick`] =
+                this._buildActivePickFromLines(listId, currentLines, nextJanIndex);
+        }
+        updates[`userStates.${currentUserId}.injectPending`] = null;
+        updates[`userStates.${currentUserId}.injectPendingCancelled`] = null;
+        updates[`userStates.${currentUserId}.duplicateHighlight`] = null;
+        transaction.update(docRef, updates);
+    }).catch((error) => {
+        this._logFirestoreError('replaceSlotLayout', error, uid);
+        throw error;
+    });
+};
+
 StateManager.prototype.normalizeJanValue = function (jan) {
     if (!jan) return "";
     let s = String(jan);

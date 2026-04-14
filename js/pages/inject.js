@@ -5,12 +5,24 @@
         const scanInput = document.getElementById('scanInput');
         const scanMsg = document.getElementById('scanMsg');
         const loadCsvBtn = document.getElementById('loadCsvBtn');
+        const slotCsvFileInput = document.getElementById('slotCsvFile');
+        const importSlotLayoutBtn = document.getElementById('importSlotLayoutBtn');
+        const exportSlotLayoutBtn = document.getElementById('exportSlotLayoutBtn');
+        const slotImportHints = document.getElementById('slotImportHints');
+        const slotImportPreviewModal = document.getElementById('slotImportPreviewModal');
+        const slotImportConfirmModal = document.getElementById('slotImportConfirmModal');
+        const slotImportPreviewSummary = document.getElementById('slotImportPreviewSummary');
+        const slotImportConfirmSummary = document.getElementById('slotImportConfirmSummary');
+        const slotImportPreviewOutOfScope = document.getElementById('slotImportPreviewOutOfScope');
+        const slotImportPreviewDuplicateJan = document.getElementById('slotImportPreviewDuplicateJan');
+        const slotImportPreviewInvalidRows = document.getElementById('slotImportPreviewInvalidRows');
         const instPanel = document.getElementById('instructionPanel');
         const sessionDisplay = document.getElementById('sessionDisplay');
         let hasRequestedInjectModeSync = false;
         let highlightedSlotKey = null;
         let highlightTimer = null;
         const HIGHLIGHT_MS = 3000;
+        let pendingSlotImportPreview = null;
 
         const stateMgr = new StateManager(
             (state) => {
@@ -85,6 +97,17 @@
         const guardedNavigate = navGuard.guardedNavigate;
         navGuard.installBeforeUnloadGuard();
 
+        const clearLocalInjectUiState = () => {
+            highlightedSlotKey = null;
+            if (highlightTimer) {
+                clearTimeout(highlightTimer);
+                highlightTimer = null;
+            }
+            stateMgr.localUiState.optimisticSlots = {};
+            stateMgr.localUiState.cancelledInjectRequestIds = {};
+            stateMgr.clearLocalInjectPending();
+        };
+
 
         const normalizeJan = (jan) => {
             return stateMgr.normalizeJanValue(jan);
@@ -132,6 +155,141 @@
             result.push(current);
             return result.map(v => v.trim());
         }
+
+        const readTableRowsFromFile = (file) => {
+            return new Promise((resolve, reject) => {
+                const lowerName = (file?.name || '').toLowerCase();
+                const isExcel = lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls');
+                const isCsv = lowerName.endsWith('.csv');
+                if (!isCsv && !isExcel) {
+                    reject(new Error('unsupported'));
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onerror = () => reject(new Error('read-failed'));
+                reader.onload = (e) => {
+                    try {
+                        if (isExcel) {
+                            if (typeof XLSX === 'undefined') {
+                                reject(new Error('xlsx-missing'));
+                                return;
+                            }
+                            const workbook = XLSX.read(e.target.result, { type: 'array' });
+                            const firstSheetName = workbook.SheetNames[0];
+                            if (!firstSheetName) {
+                                reject(new Error('sheet-missing'));
+                                return;
+                            }
+                            const firstSheet = workbook.Sheets[firstSheetName];
+                            const rows = XLSX.utils.sheet_to_json(firstSheet, {
+                                header: 1,
+                                raw: false,
+                                defval: ''
+                            });
+                            resolve(rows);
+                            return;
+                        }
+                        const text = String(e.target.result || '');
+                        const rows = text.split(/\r?\n/).filter(x => x.trim()).map(parseCsvLine);
+                        resolve(rows);
+                    } catch (err) {
+                        reject(err);
+                    }
+                };
+                if (isExcel) reader.readAsArrayBuffer(file);
+                else reader.readAsText(file);
+            });
+        };
+
+        const normalizeHeaderKey = (value) => {
+            return String(value || '')
+                .replace(/\s+/g, '')
+                .replace(/[０-９]/g, (v) => String.fromCharCode(v.charCodeAt(0) - 0xFEE0))
+                .toLowerCase();
+        };
+
+        const detectSlotImportColumnIndex = (headerRow) => {
+            const headers = (headerRow || []).map(normalizeHeaderKey);
+            const findIndex = (candidates) => headers.findIndex((h) => candidates.includes(h));
+            const bayCol = findIndex(['間口no', '間口番号', '間口']);
+            const logicalCol = findIndex(['論理間口no', '論理間口番号', '論理間口']);
+            const janCol = findIndex(['jan', 'jancode', 'janコード']);
+            if (bayCol < 0 || logicalCol < 0 || janCol < 0) return null;
+            return { bayCol, logicalCol, janCol };
+        };
+
+        const hasPickListLoaded = (state) => {
+            const injectList = state?.injectList || {};
+            return Object.keys(injectList).length > 0;
+        };
+
+        const toInt = (value) => {
+            const n = parseInt(String(value || '').trim(), 10);
+            return Number.isInteger(n) ? n : NaN;
+        };
+
+        const buildComparisonSummary = (state, importedSlots) => {
+            const currentSlots = getMergedSlots(state);
+            const currentAssignedJanSet = new Set();
+            Object.values(currentSlots).forEach((slot) => {
+                const skus = slot?.skus || (slot?.sku ? [slot.sku] : []);
+                skus.forEach((jan) => currentAssignedJanSet.add(String(jan)));
+            });
+
+            const importedAssignedJanSet = new Set();
+            Object.values(importedSlots).forEach((slot) => {
+                (slot?.skus || []).forEach((jan) => importedAssignedJanSet.add(String(jan)));
+            });
+
+            const intersection = new Set([...currentAssignedJanSet].filter((jan) => importedAssignedJanSet.has(jan)));
+            const newOnly = new Set([...importedAssignedJanSet].filter((jan) => !currentAssignedJanSet.has(jan)));
+            const removedOnly = new Set([...currentAssignedJanSet].filter((jan) => !importedAssignedJanSet.has(jan)));
+
+            return {
+                currentAssignedJanSet,
+                importedAssignedJanSet,
+                intersection,
+                newOnly,
+                removedOnly
+            };
+        };
+
+        const renderSummaryGrid = (container, items) => {
+            container.innerHTML = items.map((item) => `
+                <div class="import-summary-item">
+                    <div class="import-summary-item-label">${item.label}</div>
+                    <div class="import-summary-item-value">${item.value}</div>
+                </div>
+            `).join('');
+        };
+
+        const renderDetailList = (container, rows) => {
+            if (!rows || rows.length === 0) {
+                container.innerHTML = '（なし）';
+                return;
+            }
+            container.innerHTML = rows.map((row) => `<div>${row}</div>`).join('');
+        };
+
+        const ensureNoInProgressWorkForSlotImport = async () => {
+            const work = stateMgr.getInProgressWorkForCurrentUser(stateMgr.state);
+            if (!work.hasInjectInProgress && !work.hasPickInProgress) return true;
+            const proceed = await navGuard.showNavigationConfirmModal(
+                window.NavigationGuard.buildNavigationGuardMessage(work)
+            );
+            if (!proceed) return false;
+            try {
+                await stateMgr.cancelCurrentWorkForNavigation();
+                clearLocalInjectUiState();
+                return true;
+            } catch (error) {
+                console.error('間口配置インポート前の作業キャンセルに失敗しました:', error);
+                AudioManager.playErrorSound();
+                showMessage('❌ 作業のキャンセルに失敗しました。通信状態をご確認ください。', 'error');
+                return false;
+            }
+        };
 
         const getMergedSlots = (state) => {
             const baseSlots = { ...(state.slots || {}) };
@@ -214,6 +372,20 @@
                 lastWaitingJan = null;
                 lastWaitingJanWasAssigned = false;
             }
+
+            const pickLoaded = hasPickListLoaded(state);
+            importSlotLayoutBtn.disabled = !pickLoaded;
+            slotImportHints.innerHTML = pickLoaded
+                ? [
+                    '現在の間口配置を全置換します',
+                    '既存の配置は上書きされます',
+                    '数量は現在のピッキングリストから反映されます'
+                ].map((text) => `<p>${text}</p>`).join('')
+                : [
+                    '先にピッキングリストを読込してください',
+                    '数量は現在のピッキングリストから反映されます',
+                    'インポート時にファイル内の数量は使用しません'
+                ].map((text) => `<p>${text}</p>`).join('');
         };
 
         const showSlotSkusModal = (b, s, skus, stateMgr) => {
@@ -561,6 +733,225 @@
                 reader.readAsArrayBuffer(file);
             } else {
                 reader.readAsText(file);
+            }
+        });
+
+        const closeSlotImportModals = () => {
+            slotImportPreviewModal.classList.add('hidden');
+            slotImportConfirmModal.classList.add('hidden');
+        };
+
+        const parseSlotLayoutImportRows = (rows, state) => {
+            if (!rows || rows.length === 0) throw new Error('format-invalid');
+            const columnIndex = detectSlotImportColumnIndex(rows[0]);
+            if (!columnIndex) throw new Error('format-invalid');
+
+            const injectJanSet = new Set(Object.keys(state.injectList || {}));
+            const splitConfig = state.splits || {};
+            const rawRows = rows.slice(1);
+            const importedSlots = {};
+            const outOfScope = [];
+            const duplicateJan = new Set();
+            const duplicateJanRows = [];
+            const invalidRows = [];
+            const janToSlotKey = {};
+            const janRowHistory = {};
+            let readRows = 0;
+
+            rawRows.forEach((row, idx) => {
+                if (!Array.isArray(row)) return;
+                const lineNo = idx + 2;
+                const bayNo = toInt(row[columnIndex.bayCol]);
+                const logicalNo = toInt(row[columnIndex.logicalCol]);
+                const jan = normalizeJan(row[columnIndex.janCol]);
+                const slotKey = `${bayNo}-${logicalNo}`;
+                const maxSplit = splitConfig?.[bayNo];
+                const basicInvalid =
+                    !Number.isInteger(bayNo) || bayNo <= 0 ||
+                    !Number.isInteger(logicalNo) || logicalNo <= 0 ||
+                    !jan;
+                if (basicInvalid) {
+                    invalidRows.push(`行${lineNo}: 必要値不足または形式不正`);
+                    return;
+                }
+                readRows++;
+                if (!Number.isInteger(maxSplit) || logicalNo > maxSplit) {
+                    invalidRows.push(`行${lineNo}: 間口No.${bayNo} / 論理間口No.${logicalNo} が不正`);
+                    return;
+                }
+                if (!injectJanSet.has(jan)) {
+                    outOfScope.push(`${jan}（行${lineNo}）`);
+                    return;
+                }
+                if (!janRowHistory[jan]) janRowHistory[jan] = [];
+                janRowHistory[jan].push({ lineNo, slotKey });
+
+                const existing = janToSlotKey[jan];
+                if (existing) {
+                    duplicateJan.add(jan);
+                    return;
+                }
+                janToSlotKey[jan] = slotKey;
+            });
+
+            duplicateJan.forEach((jan) => {
+                delete janToSlotKey[jan];
+                (janRowHistory[jan] || []).forEach((info) => {
+                    duplicateJanRows.push(`${jan}（行${info.lineNo}）`);
+                });
+            });
+            Object.entries(janToSlotKey).forEach(([jan, slotKey]) => {
+                if (!importedSlots[slotKey]) importedSlots[slotKey] = { skus: [] };
+                importedSlots[slotKey].skus.push(jan);
+            });
+
+            return {
+                readRows,
+                importedSlots,
+                outOfScope,
+                duplicateJan: [...duplicateJan],
+                duplicateJanRows,
+                invalidRows
+            };
+        };
+
+        const openSlotImportPreview = (preview) => {
+            pendingSlotImportPreview = preview;
+            renderSummaryGrid(slotImportPreviewSummary, [
+                { label: '読込行数', value: preview.readRows },
+                { label: '採用件数', value: preview.adoptedCount },
+                { label: '除外行数', value: preview.excludedCount },
+                { label: '現在配置中', value: preview.currentAssignedCount },
+                { label: 'インポート後配置', value: preview.importedAssignedCount },
+                { label: '継続配置', value: preview.intersectionCount },
+                { label: '新規配置', value: preview.newOnlyCount },
+                { label: '解除される既存配置', value: preview.removedOnlyCount },
+                { label: '対象外行数', value: preview.outOfScopeCount },
+                { label: '同一JAN重複行数', value: preview.duplicateJanCount },
+                { label: '不正行数', value: preview.invalidCount }
+            ]);
+            renderDetailList(slotImportPreviewOutOfScope, preview.outOfScope);
+            renderDetailList(slotImportPreviewDuplicateJan, preview.duplicateJanRows);
+            renderDetailList(slotImportPreviewInvalidRows, preview.invalidRows);
+            slotImportPreviewModal.classList.remove('hidden');
+        };
+
+        importSlotLayoutBtn.addEventListener('click', async () => {
+            const state = stateMgr.state;
+            if (!hasPickListLoaded(state)) {
+                alert('先にピッキングリストを読込してください');
+                return;
+            }
+            const file = slotCsvFileInput.files[0];
+            if (!file) {
+                alert('ファイルを選択してください');
+                return;
+            }
+
+            try {
+                const rows = await readTableRowsFromFile(file);
+                const parsed = parseSlotLayoutImportRows(rows, state);
+                const comparison = buildComparisonSummary(state, parsed.importedSlots);
+                const adoptedCount = Object.keys(parsed.importedSlots)
+                    .reduce((sum, key) => sum + (parsed.importedSlots[key]?.skus?.length || 0), 0);
+                const excludedCount = parsed.outOfScope.length + parsed.duplicateJanRows.length + parsed.invalidRows.length;
+
+                openSlotImportPreview({
+                    ...parsed,
+                    adoptedCount,
+                    excludedCount,
+                    outOfScopeCount: parsed.outOfScope.length,
+                    duplicateJanCount: parsed.duplicateJanRows.length,
+                    invalidCount: parsed.invalidRows.length,
+                    currentAssignedCount: comparison.currentAssignedJanSet.size,
+                    importedAssignedCount: comparison.importedAssignedJanSet.size,
+                    intersectionCount: comparison.intersection.size,
+                    newOnlyCount: comparison.newOnly.size,
+                    removedOnlyCount: comparison.removedOnly.size
+                });
+            } catch (error) {
+                console.error('間口配置インポートの解析に失敗しました:', error);
+                alert('インポートファイルを解析できませんでした\n必要列（間口No / 論理間口No / JAN）を確認してください');
+            }
+        });
+
+        exportSlotLayoutBtn.addEventListener('click', () => {
+            const state = stateMgr.state || {};
+            const slots = state.slots || {};
+            const injectList = state.injectList || {};
+            const rows = [['間口No', '論理間口No', 'JAN', '参考数量']];
+            Object.entries(slots).forEach(([slotKey, slot]) => {
+                const [bayNo, logicalNo] = slotKey.split('-');
+                const skus = slot?.skus || (slot?.sku ? [slot.sku] : []);
+                skus.forEach((jan) => {
+                    rows.push([bayNo, logicalNo, jan, injectList[jan] || 0]);
+                });
+            });
+            const csvText = rows.map((row) => row.map((cell) => {
+                const v = String(cell ?? '');
+                return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+            }).join(',')).join('\n');
+            const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+            a.href = url;
+            a.download = `slot-layout-snapshot-${stamp}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        document.getElementById('slotImportPreviewCancelBtn').addEventListener('click', () => {
+            pendingSlotImportPreview = null;
+            closeSlotImportModals();
+        });
+
+        document.getElementById('slotImportPreviewProceedBtn').addEventListener('click', () => {
+            if (!pendingSlotImportPreview) return;
+            ensureNoInProgressWorkForSlotImport().then((ok) => {
+                if (!ok) return;
+                renderSummaryGrid(slotImportConfirmSummary, [
+                    { label: '採用件数', value: pendingSlotImportPreview.adoptedCount },
+                    { label: '解除される既存配置', value: pendingSlotImportPreview.removedOnlyCount },
+                    { label: '除外行数', value: pendingSlotImportPreview.excludedCount }
+                ]);
+                slotImportPreviewModal.classList.add('hidden');
+                slotImportConfirmModal.classList.remove('hidden');
+            });
+        });
+
+        document.getElementById('slotImportConfirmBackBtn').addEventListener('click', () => {
+            slotImportConfirmModal.classList.add('hidden');
+            slotImportPreviewModal.classList.remove('hidden');
+        });
+
+        document.getElementById('slotImportConfirmApplyBtn').addEventListener('click', async () => {
+            if (!pendingSlotImportPreview) return;
+            const preview = pendingSlotImportPreview;
+            if (preview.adoptedCount === 0) {
+                closeSlotImportModals();
+                pendingSlotImportPreview = null;
+                alert('反映できるデータがありませんでした\nピッキングリスト対象外または不正データのみが含まれていました');
+                return;
+            }
+            try {
+                await stateMgr.replaceSlotLayout(preview.importedSlots);
+                clearLocalInjectUiState();
+                closeSlotImportModals();
+                pendingSlotImportPreview = null;
+                if (preview.excludedCount > 0) {
+                    alert(`間口配置を更新しました\n${preview.adoptedCount}件を配置しました\n${preview.excludedCount}件は対象外または不正データのため反映していません`);
+                } else {
+                    alert(`間口配置を更新しました\n${preview.adoptedCount}件を配置し、${preview.removedOnlyCount}件の既存配置を解除しました`);
+                }
+                if (preview.duplicateJanCount > 0) {
+                    showMessage('同一JANの重複記載（同一間口含む）があるため、一部データを除外しました', 'error');
+                }
+            } catch (error) {
+                console.error('間口配置の反映に失敗しました:', error);
+                alert('間口配置の更新に失敗しました。通信状態をご確認ください。');
             }
         });
 
