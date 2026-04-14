@@ -78,24 +78,54 @@
             };
         };
 
-        const focusForCurrentMode = (state) => {
+        const canSafelyStealFocus = () => {
+            if (document.hidden) return false;
+            const active = document.activeElement;
+            if (!active || active === document.body) return true;
+
+            const tagName = String(active.tagName || '').toUpperCase();
+            if (tagName === 'INPUT') {
+                const type = String(active.type || '').toLowerCase();
+                const passiveTypes = new Set(['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file']);
+                if (passiveTypes.has(type)) return false;
+                return active === listIdInput || active === janInput;
+            }
+            if (tagName === 'BUTTON' || tagName === 'SELECT' || tagName === 'TEXTAREA') return false;
+            return true;
+        };
+
+        const isFocusableInput = (el) => {
+            if (!el) return false;
+            if (el.disabled || el.readOnly) return false;
+            if (el.type === 'hidden') return false;
+            if (!el.offsetParent) return false;
+            return true;
+        };
+
+        const restoreFocusIfNeeded = (state) => {
             const currentUserState = state?.userStates?.[stateMgr.currentUserId] || {};
             const currentPickingNo = currentUserState.currentPickingNo;
-            if (!currentPickingNo) {
-                listIdInput.focus();
-                return;
-            }
-            const remoteLines = stateMgr.currentPickList?.lines || [];
-            const lines = stateMgr.getMergedPickLines(currentPickingNo, remoteLines);
-            const allCompleted = lines.length > 0 && lines.every((line) => getLineProgress(line).done);
-            if (allCompleted) {
-                listIdInput.focus();
-                return;
-            }
             const cfg = getConfig(state);
-            if (cfg.pickMode === 'VERIFY' && janInput && !janInputWrap.classList.contains('hidden')) {
-                janInput.focus();
-            }
+            const remoteLines = stateMgr.currentPickList?.lines || [];
+            const lines = currentPickingNo ? stateMgr.getMergedPickLines(currentPickingNo, remoteLines) : [];
+            const allCompleted = lines.length > 0 && lines.every((line) => getLineProgress(line).done);
+            const verifyJanVisible = cfg.pickMode === 'VERIFY' && janInput && janInputWrap && !janInputWrap.classList.contains('hidden');
+            const target = (!currentPickingNo || allCompleted || !verifyJanVisible) ? listIdInput : janInput;
+
+            if (!isFocusableInput(target)) return;
+            if (document.activeElement === target) return;
+            if (!canSafelyStealFocus()) return;
+
+            requestAnimationFrame(() => {
+                if (!isFocusableInput(target)) return;
+                if (document.activeElement === target) return;
+                if (!canSafelyStealFocus()) return;
+                target.focus();
+            });
+        };
+
+        const focusForCurrentMode = (state) => {
+            restoreFocusIfNeeded(state);
         };
 
         const showJanFeedback = (message, type = 'info') => {
@@ -177,12 +207,7 @@
             if (!proceed) return;
 
             try {
-                if (work.hasInjectInProgress) {
-                    await stateMgr.cancelInjectPending();
-                }
-                if (work.hasPickInProgress) {
-                    await stateMgr.resetUserPick(stateMgr.currentUserId);
-                }
+                await stateMgr.cancelCurrentWorkForNavigation();
                 await loadListCore(targetId);
             } catch (e) {
                 console.error('ピッキング切り替え時のキャンセルに失敗しました:', e);
@@ -294,17 +319,20 @@
                 const msg = 'ピッキングNo.を入力してください';
                 pickTable.innerHTML = `<tr><td colspan="5" style="padding:3rem; text-align:center; color:var(--text-muted);">${msg}</td></tr>`;
                 currentListTitle.textContent = 'ピッキングNo.を入力してください';
+                restoreFocusIfNeeded(state);
                 return;
             }
             if (stateMgr.currentPickListLoading) {
                 pickTable.innerHTML = `<tr><td colspan="5" style="padding:3rem; text-align:center; color:var(--text-muted);">読込中...</td></tr>`;
                 currentListTitle.textContent = `ピッキングNo. ${currentPickingNo} を読込中...`;
+                restoreFocusIfNeeded(state);
                 return;
             }
             if (!currentPickLines) {
                 const msg = stateMgr.currentPickListNotFound ? 'データが見つかりません' : '読込中...';
                 pickTable.innerHTML = `<tr><td colspan="5" style="padding:3rem; text-align:center; color:var(--text-muted);">${msg}</td></tr>`;
                 currentListTitle.textContent = `ピッキングNo. ${currentPickingNo}`;
+                restoreFocusIfNeeded(state);
                 return;
             }
 
@@ -317,7 +345,7 @@
                 allCompleted === true
             ) {
                 AudioManager.playCompleteSound();
-                listIdInput.focus();
+                restoreFocusIfNeeded(state);
             }
             if (allCompleted) {
                 currentListTitle.innerHTML = `<span style="color: red;">完了済み：${currentPickingNo}</span>`;
@@ -367,6 +395,7 @@
                 };
             });
 
+            restoreFocusIfNeeded(state);
         };
 
         const completeLine = async (index) => {
@@ -384,12 +413,12 @@
         };
 
         // UI Event Listeners
-        listIdInput.addEventListener('keypress', (e) => {
+        listIdInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') loadList(listIdInput.value.trim());
         });
 
         if (janInput) {
-            janInput.addEventListener('keypress', (e) => {
+            janInput.addEventListener('keydown', (e) => {
                 if (e.key !== 'Enter') return;
                 e.preventDefault();
                 const cfg = getConfig();
@@ -407,8 +436,8 @@
                     });
                     if (nextPickMode === 'VERIFY') {
                         showJanFeedback('検品モードON', 'info');
-                        setTimeout(() => janInput?.focus(), 0);
                     }
+                    restoreFocusIfNeeded(stateMgr.state);
                 } catch (e) {
                     console.error('pickMode update failed:', e);
                 }
@@ -433,7 +462,7 @@
 
             try {
                 await stateMgr.resetUserPick(stateMgr.currentUserId);
-                alert('ピッキング作業をリセットしました（未完了の進捗もクリアされました）');
+                alert('ピッキング作業をリセットしました（未完了は初期化、完了済みは完了状態のまま解除）');
             } catch (e) {
                 console.error('resetPicking failed:', e);
                 AudioManager?.playErrorSound?.();
@@ -445,8 +474,16 @@
         if (userSelect) {
             userSelect.addEventListener('change', (e) => {
                 stateMgr.setCurrentUser(e.target.value);
+                requestAnimationFrame(() => restoreFocusIfNeeded(stateMgr.state));
             });
         }
+
+        window.addEventListener('focus', () => {
+            restoreFocusIfNeeded(stateMgr.state);
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) restoreFocusIfNeeded(stateMgr.state);
+        });
 
         document.querySelectorAll('.nav-link').forEach((link) => {
             link.addEventListener('click', (e) => {

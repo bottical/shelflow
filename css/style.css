@@ -168,6 +168,41 @@ input:focus {
     border-bottom-color: #b91c1c;
 }
 
+body.wall-mode #instructionBanner {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(92vw, 720px);
+    margin: 0;
+    z-index: 140;
+    pointer-events: none;
+    border-radius: 12px;
+    border-bottom-width: 0;
+    box-shadow: var(--shadow-lg);
+    animation: wallBannerSlideDown 0.3s ease-out;
+}
+
+body.wall-mode #instructionBanner button,
+body.wall-mode #instructionBanner [role="button"] {
+    pointer-events: auto;
+}
+
+body.wall-mode #instructionBanner.hidden {
+    display: none !important;
+}
+
+@keyframes wallBannerSlideDown {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -100%);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
+
 .indicator-container {
     position: absolute;
     top: 4px;

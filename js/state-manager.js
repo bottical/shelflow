@@ -16,6 +16,9 @@ function StateManager(onStateChange, onUserChange) {
     this.migrationCompleted = false;
     this.progressSummaryBackfillInFlight = false;
     this.progressSummaryBackfillCompleted = false;
+    this.progressCountedBackfillInFlight = false;
+    this.progressCountedBackfillCompleted = false;
+    this.progressCountedBackfillFailed = false;
 
     if (!firebase.apps.length) {
         firebase.initializeApp(firebaseConfig);
@@ -33,6 +36,9 @@ function StateManager(onStateChange, onUserChange) {
             this.migrationCompleted = false;
             this.progressSummaryBackfillInFlight = false;
             this.progressSummaryBackfillCompleted = false;
+            this.progressCountedBackfillInFlight = false;
+            this.progressCountedBackfillCompleted = false;
+            this.progressCountedBackfillFailed = false;
             this.subscribeToState(user.uid);
         } else {
             if (this.unsubscribeState) this.unsubscribeState();
@@ -128,6 +134,7 @@ StateManager.prototype.getInProgressWorkForCurrentUser = function (state) {
     const targetState = state || this.state || {};
     const currentUserState = targetState.userStates?.[this.currentUserId] || {};
     const injectPending = this.getEffectiveInjectPendingForCurrentUser(targetState);
+    const duplicateHighlight = currentUserState.duplicateHighlight || null;
     const currentPickingNo = currentUserState.currentPickingNo || null;
     const activePick = currentUserState.activePick || {};
     const hasPickEntries = Object.values(activePick).some((entry) => {
@@ -137,8 +144,9 @@ StateManager.prototype.getInProgressWorkForCurrentUser = function (state) {
     });
 
     return {
-        hasInjectInProgress: !!injectPending,
+        hasInjectInProgress: !!injectPending || !!duplicateHighlight,
         injectPending,
+        duplicateHighlight,
         hasPickInProgress: !!currentPickingNo && hasPickEntries,
         currentPickingNo,
         activePick
@@ -147,10 +155,20 @@ StateManager.prototype.getInProgressWorkForCurrentUser = function (state) {
 
 StateManager.prototype.cancelCurrentWorkForNavigation = async function () {
     const work = this.getInProgressWorkForCurrentUser(this.state);
-    if (work.hasInjectInProgress) {
+    const hadInjectPending = !!work.injectPending;
+    const hadDuplicateHighlight = !!work.duplicateHighlight;
+
+    // cancelInjectPending() clears both injectPending and duplicateHighlight together.
+    if (hadInjectPending) {
         await this.cancelInjectPending();
+    } else if (hadDuplicateHighlight) {
+        await this.clearDuplicateHighlight();
+        this.clearLocalInjectPending();
     }
-    if (work.hasPickInProgress) {
+
+    // currentPickingNo がある場合は、進捗の完了/未完了に関わらず
+    // resetUserPick() の分岐ロジックで適切に解除する。
+    if (work.currentPickingNo) {
         await this.resetUserPick(this.currentUserId);
     }
     return work;
@@ -721,6 +739,7 @@ StateManager.prototype.subscribeToState = function (uid) {
             const data = doc.data();
             this._migrateLegacyPickListsIfNeeded(uid, data);
             this._backfillProgressSummaryIfNeeded(uid, data);
+            this._backfillProgressCountedCompletedIfNeeded(uid, data);
             // Migrate old state if needed
             if (!data.userStates) {
                 this.migrateToMultiUser(uid, data);
@@ -769,6 +788,56 @@ StateManager.prototype._backfillProgressSummaryIfNeeded = function (uid, data) {
         this._logFirestoreError('_backfillProgressSummaryIfNeeded', error, uid);
     }).finally(() => {
         this.progressSummaryBackfillInFlight = false;
+    });
+};
+
+StateManager.prototype._backfillProgressCountedCompletedIfNeeded = function (uid, data) {
+    if (this.progressCountedBackfillCompleted || this.progressCountedBackfillInFlight || this.progressCountedBackfillFailed) return;
+    const hasProgressSummary =
+        !!data?.progressSummary &&
+        Number.isFinite(Number(data.progressSummary.total)) &&
+        Number.isFinite(Number(data.progressSummary.completed));
+    if (!hasProgressSummary) return;
+
+    this.progressCountedBackfillInFlight = true;
+    this._getPickListCollectionRef(uid).get().then(async (snapshot) => {
+        if (snapshot.empty) {
+            this.progressCountedBackfillCompleted = true;
+            return;
+        }
+
+        const pendingUpdates = [];
+        snapshot.docs.forEach((doc) => {
+            const pickListData = doc.data() || {};
+            const alreadyDefined = typeof pickListData.progressCountedCompleted === 'boolean';
+            if (alreadyDefined) return;
+
+            const lines = this._normalizePickLines(pickListData.lines || []);
+            const isCompletedNow = this._isPickListCompleted(lines);
+            pendingUpdates.push({
+                ref: doc.ref,
+                progressCountedCompleted: !!isCompletedNow
+            });
+        });
+
+        const chunkSize = this._getBatchChunkSize();
+        for (let i = 0; i < pendingUpdates.length; i += chunkSize) {
+            const chunk = pendingUpdates.slice(i, i + chunkSize);
+            const batch = this.db.batch();
+            chunk.forEach((entry) => {
+                batch.update(entry.ref, {
+                    progressCountedCompleted: entry.progressCountedCompleted,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            });
+            await batch.commit();
+        }
+        this.progressCountedBackfillCompleted = true;
+    }).catch((error) => {
+        this.progressCountedBackfillFailed = true;
+        this._logFirestoreError('_backfillProgressCountedCompletedIfNeeded', error, uid);
+    }).finally(() => {
+        this.progressCountedBackfillInFlight = false;
     });
 };
 
@@ -978,6 +1047,7 @@ StateManager.prototype._writePickListEntriesInChunks = async function (uid, entr
         chunk.forEach(([listId, lines]) => {
             batch.set(this._getPickListDocRef(uid, listId), {
                 lines: this._normalizePickLines(Array.isArray(lines) ? lines : []),
+                progressCountedCompleted: false,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
         });
@@ -1053,12 +1123,18 @@ StateManager.prototype.getPickListProgressSummary = async function () {
     return this.state?.progressSummary || { total: 0, completed: 0 };
 };
 
-StateManager.prototype._applyProgressSummaryDelta = function (stateUpdates, beforeLines, afterLines) {
+StateManager.prototype._applyCompletedCountOnFirstCompletion = function (stateUpdates, pickListData, beforeLines, afterLines) {
+    // progressSummary.completed tracks "counted completion achievements in this CSV run",
+    // not "currently completed pick lists".
+    const wasCountedCompleted = pickListData?.progressCountedCompleted === true;
+    if (wasCountedCompleted) return false;
+
     const beforeDone = this._isPickListCompleted(beforeLines || []);
     const afterDone = this._isPickListCompleted(afterLines || []);
-    if (beforeDone === afterDone) return;
-    const delta = afterDone ? 1 : -1;
-    stateUpdates['progressSummary.completed'] = firebase.firestore.FieldValue.increment(delta);
+    if (beforeDone || !afterDone) return false;
+
+    stateUpdates['progressSummary.completed'] = firebase.firestore.FieldValue.increment(1);
+    return true;
 };
 
 StateManager.prototype._hasActiveSkuInSlot = function (slotData) {
@@ -1132,27 +1208,31 @@ StateManager.prototype._applyResetLogic = async function (userId, uid, data, upd
         const pickListRef = this._getPickListDocRef(uid, oldListId);
         const pickListDoc = transaction ? await transaction.get(pickListRef) : await pickListRef.get();
         if (pickListDoc.exists) {
-            const lines = this._normalizePickLines(pickListDoc.data()?.lines || []);
-            if (lines.length > 0) {
-                const nextLines = lines.map((l) => ({ ...l, checkedQty: 0, status: 'PENDING' }));
+            const pickListData = pickListDoc.data() || {};
+            const lines = this._normalizePickLines(pickListData.lines || []);
+            const isCompleted = this._isPickListCompleted(lines);
+            // 未完了 reset のみ lines を初期化する。
+            // 完了済み reset は「完了取消」ではなくセッション解除のみ。
+            if (!isCompleted && lines.length > 0) {
+                const nextLines = lines.map((line) => ({ ...line, checkedQty: 0, status: 'PENDING' }));
                 const hasChanged = nextLines.some((line, idx) => (
                     line.checkedQty !== lines[idx].checkedQty || line.status !== lines[idx].status
                 ));
-                if (transaction) {
-                    transaction.update(pickListRef, {
+                if (hasChanged) {
+                    const listUpdates = {
                         lines: nextLines,
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                } else {
-                    await pickListRef.update({
-                        lines: nextLines,
-                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
+                    };
+                    if (transaction) {
+                        transaction.update(pickListRef, listUpdates);
+                    } else {
+                        await pickListRef.update(listUpdates);
+                    }
                 }
-                if (hasChanged) this._applyProgressSummaryDelta(updates, lines, nextLines);
             }
         }
     }
+
     updates[`userStates.${userId}.currentPickingNo`] = null;
     updates[`userStates.${userId}.activePick`] = {};
 };
@@ -1405,15 +1485,16 @@ StateManager.prototype.completePickLine = function (listId, index) {
         const stateRef = this._getStateDocRef(uid);
         const [listDoc, stateDoc] = await Promise.all([transaction.get(listRef), transaction.get(stateRef)]);
         if (!listDoc.exists || !stateDoc.exists) return;
-        const lines = this._normalizePickLines(listDoc.data()?.lines || []);
+        const pickListData = listDoc.data() || {};
+        const lines = this._normalizePickLines(pickListData.lines || []);
         if (!lines[index] || this._isLineCompleted(lines[index])) return;
         const beforeLines = [...lines];
         const targetQty = this._toSafeQty(lines[index].qty);
         lines[index] = { ...lines[index], checkedQty: targetQty, status: 'DONE' };
-        transaction.update(listRef, {
+        const listUpdates = {
             lines,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
 
         const data = stateDoc.data() || {};
         const janIndex = data.janIndex || {};
@@ -1422,7 +1503,9 @@ StateManager.prototype.completePickLine = function (listId, index) {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
-        this._applyProgressSummaryDelta(stateUpdates, beforeLines, lines);
+        const counted = this._applyCompletedCountOnFirstCompletion(stateUpdates, pickListData, beforeLines, lines);
+        if (counted) listUpdates.progressCountedCompleted = true;
+        transaction.update(listRef, listUpdates);
         transaction.update(stateRef, stateUpdates);
     });
 };
@@ -1437,7 +1520,8 @@ StateManager.prototype.completePickBySlot = function (listId, slotKey) {
         if (!listDoc.exists || !stateDoc.exists) return;
         const data = stateDoc.data() || {};
         const janIndex = data.janIndex || {};
-        const lines = this._normalizePickLines(listDoc.data()?.lines || []);
+        const pickListData = listDoc.data() || {};
+        const lines = this._normalizePickLines(pickListData.lines || []);
         const beforeLines = [...lines];
         let changed = false;
         const nextLines = lines.map((line) => {
@@ -1449,16 +1533,18 @@ StateManager.prototype.completePickBySlot = function (listId, slotKey) {
             return { ...line, checkedQty: targetQty, status: 'DONE' };
         });
         if (!changed) return;
-        transaction.update(listRef, {
+        const listUpdates = {
             lines: nextLines,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
         const activePick = this._buildActivePickFromLines(listId, nextLines, janIndex);
         const stateUpdates = {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
-        this._applyProgressSummaryDelta(stateUpdates, beforeLines, nextLines);
+        const counted = this._applyCompletedCountOnFirstCompletion(stateUpdates, pickListData, beforeLines, nextLines);
+        if (counted) listUpdates.progressCountedCompleted = true;
+        transaction.update(listRef, listUpdates);
         transaction.update(stateRef, stateUpdates);
     });
 };
@@ -1544,7 +1630,8 @@ StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
         const quantityVerification = typeof forceQuantityVerification === 'boolean'
             ? forceQuantityVerification
             : !!config.quantityVerification;
-        const lines = this._normalizePickLines(listDoc.data()?.lines || []);
+        const pickListData = listDoc.data() || {};
+        const lines = this._normalizePickLines(pickListData.lines || []);
         const beforeLines = [...lines];
 
         const matchedIndexes = [];
@@ -1577,17 +1664,19 @@ StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
         const nextLines = [...lines];
         nextLines[targetIndex] = nextLine;
 
-        transaction.update(listRef, {
+        const listUpdates = {
             lines: nextLines,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
 
         const activePick = this._buildActivePickFromLines(listId, nextLines, janIndex);
         const stateUpdates = {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
-        this._applyProgressSummaryDelta(stateUpdates, beforeLines, nextLines);
+        const counted = this._applyCompletedCountOnFirstCompletion(stateUpdates, pickListData, beforeLines, nextLines);
+        if (counted) listUpdates.progressCountedCompleted = true;
+        transaction.update(listRef, listUpdates);
         transaction.update(stateRef, stateUpdates);
 
         return {

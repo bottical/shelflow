@@ -1,15 +1,14 @@
 // Shared navigation guard helpers (Non-module)
 (function () {
     const buildNavigationGuardMessage = (work) => {
+        const jan = work.injectPending?.jan || work.duplicateHighlight?.jan || '---';
         if (work.hasInjectInProgress && work.hasPickInProgress) {
-            const jan = work.injectPending?.jan || '---';
             return {
                 title: '作業途中のデータがあります',
                 body: `現在、投入途中（JAN: ${jan}）かつピッキング途中（No.${work.currentPickingNo}）です。キャンセルして移動しますか？`
             };
         }
         if (work.hasInjectInProgress) {
-            const jan = work.injectPending?.jan || '---';
             return {
                 title: '投入途中のデータがあります',
                 body: `現在、JAN ${jan} の投入途中です。キャンセルして移動しますか？`
@@ -22,15 +21,14 @@
     };
 
     const buildSwitchPickingMessage = (oldId, newId, work) => {
+        const jan = work?.injectPending?.jan || work?.duplicateHighlight?.jan || '---';
         if (work?.hasInjectInProgress && work?.hasPickInProgress) {
-            const jan = work.injectPending?.jan || '---';
             return {
                 title: '作業途中のデータがあります',
                 body: `現在、投入途中（JAN: ${jan}）かつピッキングNo.${oldId} の途中です。キャンセルしてピッキングNo.${newId} を開始しますか？`
             };
         }
         if (work?.hasInjectInProgress) {
-            const jan = work.injectPending?.jan || '---';
             return {
                 title: '投入途中のデータがあります',
                 body: `現在、JAN ${jan} の投入途中です。キャンセルしてピッキングNo.${newId} を開始しますか？`
