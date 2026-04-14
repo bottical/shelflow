@@ -879,13 +879,19 @@
             const state = stateMgr.state || {};
             const slots = state.slots || {};
             const injectList = state.injectList || {};
-            const rows = [['間口No', '論理間口No', 'JAN', '参考数量']];
+            const rows = [['bay_no', 'logical_slot_no', 'jan', 'reference_qty', 'assignment_status']];
+            const allocatedJanSet = new Set();
             Object.entries(slots).forEach(([slotKey, slot]) => {
                 const [bayNo, logicalNo] = slotKey.split('-');
                 const skus = slot?.skus || (slot?.sku ? [slot.sku] : []);
                 skus.forEach((jan) => {
-                    rows.push([bayNo, logicalNo, jan, injectList[jan] || 0]);
+                    allocatedJanSet.add(String(jan));
+                    rows.push([bayNo, logicalNo, jan, injectList[jan] || 0, 'assigned']);
                 });
+            });
+            Object.keys(injectList).forEach((jan) => {
+                if (allocatedJanSet.has(jan)) return;
+                rows.push(['UNASSIGNED', 'UNASSIGNED', jan, injectList[jan] || 0, 'unassigned']);
             });
             const csvText = rows.map((row) => row.map((cell) => {
                 const v = String(cell ?? '');

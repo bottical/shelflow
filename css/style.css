@@ -276,6 +276,55 @@ body.wall-mode #instructionBanner.hidden {
     margin: 0;
 }
 
+.inject-primary-card {
+    padding: 1.25rem 1.5rem;
+}
+
+.inject-secondary-card {
+    background: #fcfdff;
+}
+
+.inject-admin-tools {
+    background: #f8fafc;
+    border-style: dashed;
+    border-color: #cbd5e1;
+    box-shadow: none;
+    padding: 0.9rem 1rem;
+}
+
+.inject-admin-tools summary {
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    list-style: none;
+}
+
+.inject-admin-tools summary::-webkit-details-marker {
+    display: none;
+}
+
+.inject-admin-tools summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 0.35rem;
+    transition: transform 0.2s ease;
+}
+
+.inject-admin-tools[open] summary::before {
+    transform: rotate(90deg);
+}
+
+.compact-hint {
+    font-size: 0.72rem;
+    line-height: 1.35;
+}
+
+.compact-actions .btn {
+    font-size: 0.78rem;
+    padding: 0.45rem 0.75rem;
+}
+
 .import-modal-overlay {
     position: fixed;
     inset: 0;

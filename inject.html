@@ -69,29 +69,8 @@
 
     <div class="container">
         <aside class="sidebar mobile-fullscreen">
-            <div class="card flex-column gap-1">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; font-size:1rem;">1. CSVファイル読込</h3>
-                    <button id="csvConfigBtn" class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;">⚙️ 設定</button>
-                </div>
-                <input type="file" id="csvFile" accept=".csv,.xlsx,.xls" style="font-size: 0.8rem;">
-                <button id="loadCsvBtn" class="btn btn-primary" style="width:100%;">インポート実行</button>
-            </div>
-
-            <div class="card flex-column gap-1">
-                <h3 style="margin:0; font-size:1rem;">2. 間口配置インポート / エクスポート</h3>
-                <input type="file" id="slotCsvFile" accept=".csv,.xlsx,.xls" style="font-size: 0.8rem;">
-                <button id="importSlotLayoutBtn" class="btn btn-primary" style="width:100%;">間口配置をインポート</button>
-                <button id="exportSlotLayoutBtn" class="btn btn-outline" style="width:100%;">現在の間口配置をエクスポート</button>
-                <div id="slotImportHints" class="import-hint-list" style="font-size: 0.75rem;"></div>
-                <div class="import-hint-list" style="font-size: 0.75rem;">
-                    <p>現在の配置情報をそのまま出力します</p>
-                    <p>数量は参考値として含まれます</p>
-                </div>
-            </div>
-
-            <div class="card flex-column gap-1">
-                <h3 style="margin:0; font-size:1rem; text-align: center;">商品スキャン</h3>
+            <div class="card flex-column gap-1 inject-primary-card">
+                <h3 style="margin:0; font-size:1rem; text-align: center;">1. 商品スキャン</h3>
                 <input type="text" id="scanInput" placeholder="JANスキャン..." autocomplete="off"
                     style="font-size: 1.5rem; padding: 1rem; text-align: center;">
                 <div id="scanMsg" class="alert hidden" style="text-align: center; font-size: 1.1rem; padding: 1.5rem;">
@@ -116,6 +95,36 @@
                     ✖️ スキャンを取り消す
                 </button>
             </div>
+
+            <div class="card flex-column gap-1 inject-secondary-card">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; font-size:1rem;">2. CSVファイル読込</h3>
+                    <button id="csvConfigBtn" class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;">⚙️ 設定</button>
+                </div>
+                <input type="file" id="csvFile" accept=".csv,.xlsx,.xls" style="font-size: 0.8rem;">
+                <button id="loadCsvBtn" class="btn btn-primary" style="width:100%;">インポート実行</button>
+            </div>
+
+            <details class="card inject-admin-tools">
+                <summary>詳細操作（間口配置の入出力）</summary>
+                <div class="flex-column gap-1" style="margin-top: 0.75rem;">
+                    <input type="file" id="slotCsvFile" accept=".csv,.xlsx,.xls" style="font-size: 0.8rem;">
+                    <div class="compact-actions flex-column" style="gap: 0.5rem;">
+                        <button id="importSlotLayoutBtn" class="btn btn-primary" style="width:100%;">間口配置をインポート</button>
+                        <button id="exportSlotLayoutBtn" class="btn btn-outline" style="width:100%;">配置CSVを出力</button>
+                    </div>
+                    <div id="slotImportHints" class="import-hint-list compact-hint"></div>
+                    <div class="import-hint-list compact-hint">
+                        <p><strong>import:</strong></p>
+                        <p>現在の配置を全置換します</p>
+                        <p>数量は現行ピッキングリスト基準です</p>
+                    </div>
+                    <div class="import-hint-list compact-hint">
+                        <p><strong>export:</strong></p>
+                        <p>割り当て済み / 未割り当てを出力します</p>
+                    </div>
+                </div>
+            </details>
 
             <div class="hide-on-mobile"
                 style="margin-top: auto; padding: 1rem; background: #f8fafc; border-radius: 0.5rem; font-size: 0.75rem; color: var(--text-muted);">
