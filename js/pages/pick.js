@@ -168,6 +168,35 @@
             }
         });
         const guardedNavigate = navGuard.guardedNavigate;
+        const navigateWithCompletedPickCleanup = async (page) => {
+            const currentUserState = stateMgr.state?.userStates?.[stateMgr.currentUserId] || {};
+            const currentPickingNo = currentUserState.currentPickingNo;
+            if (page === 'inject.html' && currentPickingNo && stateMgr.currentPickListLoading) {
+                showInlineError('ピッキング状態を確認中です。少し待ってから再度お試しください。');
+                AudioManager?.playErrorSound?.();
+                return;
+            }
+            const remoteLines = stateMgr.currentPickList?.lines || [];
+            const lines = currentPickingNo
+                ? stateMgr.getMergedPickLines(currentPickingNo, remoteLines)
+                : [];
+            const allCompleted = lines.length > 0 && lines.every((line) => getLineProgress(line).done);
+
+            if (page === 'inject.html' && currentPickingNo && allCompleted) {
+                try {
+                    await stateMgr.resetUserPick(stateMgr.currentUserId);
+                    window.location.href = page;
+                    return;
+                } catch (e) {
+                    console.error('完了済みピッキングの解除に失敗しました:', e);
+                    AudioManager?.playErrorSound?.();
+                    showInlineError('完了済みピッキングの解除に失敗したため、ページ移動を中止しました。通信状態をご確認ください。');
+                    return;
+                }
+            }
+
+            await guardedNavigate(page);
+        };
 
         const loadListCore = async (id) => {
             const pickList = await stateMgr.loadPickList(id);
@@ -489,6 +518,10 @@
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 const page = link.getAttribute('data-page');
+                if (page === 'inject.html') {
+                    navigateWithCompletedPickCleanup(page);
+                    return;
+                }
                 guardedNavigate(page);
             });
         });
