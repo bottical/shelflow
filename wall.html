@@ -479,35 +479,35 @@
             <h3 style="margin-top:0;">📱 Wall 初期設定</h3>
             
             <div class="flex-column gap-1">
+                <h2 style="margin:0 0 0.25rem 0; font-size:1.15rem;">WALL設定</h2>
+
                 <section class="settings-section" style="border:1px solid var(--border); border-radius:0.75rem; padding:0.75rem;">
-                    <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">表示・運用設定</h3>
+                    <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">この端末の表示設定</h3>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin:0 0 0.75rem; line-height:1.5;">
+                        このセクションの設定は、この端末のWALL表示だけに保存されます。他の端末には影響しません。
+                    </p>
 
                     <div>
-                        <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">
-                            全間口の一括分割数
-                        </label>
-                        <select id="settingBulkSplit" style="width:100%; padding:8px; border:1px solid #334155; border-radius:6px; background:#7a9ce7; color:white;">
-                            <option value="">変更しない</option>
-                            <option value="1">1 分割</option>
-                            <option value="2">2 分割</option>
-                            <option value="3">3 分割</option>
-                            <option value="4">4 分割</option>
-                            <option value="5">5 分割</option>
-                            <option value="6">6 分割</option>
+                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">表示モード</label>
+                        <select id="settingViewMode" style="width:100%; padding:0.75rem 1rem; border-radius:0.5rem; border:1px solid var(--border); margin-top:0.25rem;">
+                            <option value="single">個別表示 (スマホ向け)</option>
+                            <option value="multi">一覧表示 (PC/タブレット向け)</option>
                         </select>
-                        <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">
-                            一括分割は、全間口に同じ分割数をまとめて適用します。<br>
-                            縮小できない間口は既存データ保護のため据え置かれます。
-                        </div>
                     </div>
 
                     <div style="margin-top:0.75rem;">
-                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top: 1rem; display:block;">この端末の表示スタート間口 (No.)</label>
+                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top: 1rem; display:block;">表示スタート間口 (No.)</label>
                         <input type="number" id="settingMultiStartId" min="1" max="100" value="1" style="margin-top:0.25rem;">
-                        <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.5rem 0 0;">
-                            この値は端末ごとに保存されます。他のタブレットには影響しません。
-                        </p>
                     </div>
+
+                    <div id="multiSettings" style="margin-top:0.75rem;">
+                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">一覧表示の行 × 列</label>
+                        <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.25rem;">
+                            <input type="number" id="settingMultiRows" min="1" max="10" value="3" style="width:80px;"> 行 ×
+                            <input type="number" id="settingMultiCols" min="1" max="10" value="3" style="width:80px;"> 列
+                        </div>
+                    </div>
+                    <div id="singleSettings" class="hidden"></div>
 
                     <div style="margin-top:0.75rem;">
                         <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">表示サイズ</label>
@@ -525,55 +525,53 @@
                         <input type="checkbox" id="settingShowOthers" checked style="width:auto;"> 他ユーザーの状況を表示する
                     </label>
 
-                    <button id="saveDisplaySettingsBtn" class="btn btn-primary" style="width:100%; margin-top:1rem;">表示・運用設定を保存</button>
+                    <button id="saveDisplaySettingsBtn" class="btn btn-primary" style="width:100%; margin-top:1rem;">この端末の表示設定を保存</button>
                 </section>
 
-                <details id="advancedSettingsDetails" class="settings-section settings-section-advanced" style="border:1px solid var(--border); border-radius:0.75rem; padding:0.75rem;">
-                    <summary style="cursor:pointer; font-weight:bold;">詳細設定を開く（総間口数・表示モード）</summary>
+                <details id="advancedSettingsDetails" class="settings-section settings-section-advanced" style="border:1px solid var(--border); border-radius:0.75rem; padding:0.75rem;" open>
+                    <summary style="cursor:pointer; font-weight:bold;">全端末共通のレイアウト設定</summary>
+
+                    <div id="globalSettingsLoadWarning" class="settings-warning hidden" style="margin-top:0.75rem; padding:0.75rem; border-radius:0.5rem; background:#fef3c7; border:1px solid #f59e0b; color:#78350f; font-size:0.8rem; line-height:1.5;">
+                        全端末共通のレイアウト設定を取得できませんでした。<br>
+                        現在は、この端末に残っている前回設定を暫定表示しています。<br>
+                        通信復帰後に再読み込みしてください。
+                    </div>
 
                     <div class="settings-warning" style="margin-top:0.75rem; padding:0.75rem; border-radius:0.5rem; background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; font-size:0.8rem; line-height:1.5;">
-                        詳細設定は全端末の表示構成に影響します。<br>
-                        通常運用中の変更は、表示範囲や間口番号のズレにつながる可能性があります。<br>
-                        管理者のみ変更してください。
+                        この設定は全端末共通です。<br>
+                        変更すると、スマホ・タブレットを含むすべてのWALL画面に反映されます。<br>
+                        通常運用中の変更は、表示ズレの原因になる可能性があります。
                     </div>
 
                     <div style="margin-top:0.75rem;">
                         <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">現在の総間口数</label>
                         <div id="currentBaysValue" style="margin-top:0.25rem; font-size:1rem; font-weight:bold; color:var(--text);">-</div>
-                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top:0.5rem; display:block;">変更後の総間口数 (No.1〜)</label>
+                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top:0.5rem; display:block;">総間口数 (No.1〜)</label>
                         <input type="number" id="settingBays" min="1" max="100" value="9" style="margin-top:0.25rem;">
                         <div id="settingBaysRiskNotice" class="hidden" style="margin-top:0.5rem; padding:0.75rem; border-radius:0.5rem; font-size:0.85rem; line-height:1.45;"></div>
                     </div>
 
                     <div style="margin-top:0.75rem;">
-                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">表示モード</label>
-                        <select id="settingViewMode" style="width:100%; padding:0.75rem 1rem; border-radius:0.5rem; border:1px solid var(--border); margin-top:0.25rem;">
-                            <option value="single">個別表示 (スマホ向け)</option>
-                            <option value="multi">一覧表示 (PC/タブレット向け)</option>
+                        <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">全間口の一括分割数</label>
+                        <select id="settingBulkSplit" style="width:100%; padding:8px; border:1px solid #334155; border-radius:6px; background:#7a9ce7; color:white;">
+                            <option value="">変更しない</option><option value="1">1 分割</option><option value="2">2 分割</option><option value="3">3 分割</option><option value="4">4 分割</option><option value="5">5 分割</option><option value="6">6 分割</option>
                         </select>
+                        <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">縮小できない間口は既存データ保護のため据え置かれます。</div>
                     </div>
 
-                    <div id="singleSettings" style="margin-top:0.75rem;">
-                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">画面の向き (個別表示時)</label>
+                    <div style="margin-top:0.75rem;">
+                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">分割表示の向き</label>
                         <select id="settingOrientation" style="width:100%; padding:0.75rem 1rem; border-radius:0.5rem; border:1px solid var(--border); margin-top:0.25rem;">
-                            <option value="portrait">縦表示 (Portrait)</option>
-                            <option value="landscape">横表示 (Landscape)</option>
+                            <option value="portrait">縦方向に並べる</option>
+                            <option value="landscape">横方向に並べる</option>
                         </select>
-                    </div>
-
-                    <div id="multiSettings" class="hidden" style="margin-top:0.75rem;">
-                        <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">一覧のレイアウト (行 × 列)</label>
-                        <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.25rem;">
-                            <input type="number" id="settingMultiRows" min="1" max="10" value="3" style="width:80px;"> 行 ×
-                            <input type="number" id="settingMultiCols" min="1" max="10" value="3" style="width:80px;"> 列
-                        </div>
-                        <p style="font-size:0.75rem; color:var(--text-muted); margin:0.5rem 0 0;">
-                            一覧表示で1画面に表示する間口数を決めます。<br>
-                            行数 × 列数 が総間口数以上の場合、表示スタート間口は実質 No.1 固定になります。
+                        <p style="font-size:0.75rem; color:var(--text-muted); margin:0.5rem 0 0; line-height:1.5;">
+                            この設定は全端末共通です。<br>
+                            スマホ個別表示だけでなく、タブレット一覧表示内の分割間口にも反映されます。
                         </p>
                     </div>
 
-                    <button id="saveAdvancedSettingsBtn" class="btn btn-primary" style="width:100%; margin-top:1rem;">詳細設定を保存</button>
+                    <button id="saveAdvancedSettingsBtn" class="btn btn-primary" style="width:100%; margin-top:1rem;">全端末共通のレイアウト設定を保存</button>
                 </details>
                 <button id="closeSettingsBtn" class="btn btn-outline hidden" style="width:100%; margin-top:0.5rem;">キャンセル</button>
                 <hr style="border:0; border-top:1px solid var(--border); width: 100%; margin: 1rem 0 0.5rem 0;">

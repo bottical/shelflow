@@ -38,6 +38,7 @@
         const currentBaysValue = document.getElementById('currentBaysValue');
         const closeSettingsBtn = document.getElementById('closeSettingsBtn');
         const DEVICE_SETTINGS_KEY = 'picking_shelf_wall_device_settings_v1';
+        const globalSettingsLoadWarning = document.getElementById('globalSettingsLoadWarning');
 
         const getDeviceWallSettings = () => {
             try {
@@ -52,6 +53,33 @@
             const next = { ...current, ...partial };
             localStorage.setItem(DEVICE_SETTINGS_KEY, JSON.stringify(next));
             return next;
+        };
+
+        const getEffectiveWallConfig = (state) => {
+            const config = state?.config || {};
+            const deviceSettings = getDeviceWallSettings();
+            return {
+                ...config,
+                viewMode: ['single', 'multi'].includes(deviceSettings.viewMode) ? deviceSettings.viewMode : (config.viewMode || 'multi'),
+                multiRows: parseInt(deviceSettings.multiRows, 10) || config.multiRows || 3,
+                multiCols: parseInt(deviceSettings.multiCols, 10) || config.multiCols || 3,
+                showOthers: deviceSettings.showOthers !== undefined ? deviceSettings.showOthers !== false : config.showOthers !== false
+            };
+        };
+
+        const updateGlobalSettingsLoadWarning = () => {
+            const failed = !!stateMgr.globalLayoutSettingsLoadFailed;
+            if (globalSettingsLoadWarning) globalSettingsLoadWarning.classList.toggle('hidden', !failed);
+            if (saveAdvancedSettingsBtn) {
+                saveAdvancedSettingsBtn.dataset.globalLoadBlocked = failed ? 'true' : 'false';
+                if (failed) {
+                    saveAdvancedSettingsBtn.disabled = true;
+                    saveAdvancedSettingsBtn.textContent = '通信復帰後に保存してください';
+                } else if (saveAdvancedSettingsBtn.dataset.baysRiskBlocked !== 'true' && saveAdvancedSettingsBtn.dataset.otherValidationBlocked !== 'true') {
+                    saveAdvancedSettingsBtn.disabled = false;
+                    saveAdvancedSettingsBtn.textContent = '全端末共通のレイアウト設定を保存';
+                }
+            }
         };
 
         // Bay Edit Elements
@@ -115,6 +143,35 @@
         }
 
         let navigationGuardErrorTimer = null;
+        let offlineFallbackSetupShown = false;
+        const showOfflineFallbackNotice = () => {
+            let el = document.getElementById('offlineFallbackNotice');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'offlineFallbackNotice';
+                el.style.position = 'fixed';
+                el.style.left = '50%';
+                el.style.top = 'calc(env(safe-area-inset-top, 0px) + 72px)';
+                el.style.transform = 'translateX(-50%)';
+                el.style.width = 'min(92vw, 560px)';
+                el.style.background = '#78350f';
+                el.style.color = '#fffbeb';
+                el.style.padding = '12px 14px';
+                el.style.border = '1px solid #f59e0b';
+                el.style.borderRadius = '10px';
+                el.style.zIndex = '3100';
+                el.style.lineHeight = '1.55';
+                el.style.fontWeight = '700';
+                el.style.boxShadow = '0 10px 30px rgba(0,0,0,0.25)';
+                document.body.appendChild(el);
+            }
+            el.innerHTML = '通信不安定のため、現在は前回取得したレイアウト設定のみを表示しています。<br>作業データは最新ではない可能性があります。<br>通信復帰後に自動更新されます。';
+        };
+
+        const hideOfflineFallbackNotice = () => {
+            document.getElementById('offlineFallbackNotice')?.remove();
+        };
+
         const showNavigationGuardError = (message) => {
             let el = document.getElementById('navigationGuardError');
             if (!el) {
@@ -150,13 +207,8 @@
 
         // --- Setup Logic ---
         settingViewMode.addEventListener('change', () => {
-            if (settingViewMode.value === 'single') {
-                singleSettings.classList.remove('hidden');
-                multiSettings.classList.add('hidden');
-            } else {
-                singleSettings.classList.add('hidden');
-                multiSettings.classList.remove('hidden');
-            }
+            if (singleSettings) singleSettings.classList.add('hidden');
+            if (multiSettings) multiSettings.classList.toggle('hidden', settingViewMode.value !== 'multi');
         });
 
         const showSetup = (canCancel) => {
@@ -167,7 +219,8 @@
                 closeSettingsBtn.classList.add('hidden');
             }
             // Populate current values
-            const cfg = stateMgr.state?.config || {};
+            updateGlobalSettingsLoadWarning();
+            const cfg = getEffectiveWallConfig(stateMgr.state);
             if (cfg.bays) settingBays.value = cfg.bays;
             if (cfg.viewMode) settingViewMode.value = cfg.viewMode;
             if (cfg.orientation) settingOrientation.value = cfg.orientation;
@@ -199,7 +252,7 @@
         settingBays.addEventListener('change', () => refreshBaysRiskUi());
 
         saveDisplaySettingsBtn.addEventListener('click', async () => {
-            const currentConfig = stateMgr.state?.config || {};
+            const currentConfig = getEffectiveWallConfig(stateMgr.state);
             if (!currentConfig.bays) {
                 advancedSettingsDetails.open = true;
                 alert('先に総間口数を設定してください。');
@@ -210,35 +263,29 @@
             saveDeviceWallSettings({
                 multiStartId: localMultiStartId,
                 displayScale: localDisplayScale,
-                denseTextMode: !!settingDenseTextMode.checked
+                denseTextMode: !!settingDenseTextMode.checked,
+                viewMode: settingViewMode.value,
+                multiRows: parseInt(settingMultiRows.value, 10) || 3,
+                multiCols: parseInt(settingMultiCols.value, 10) || 3,
+                showOthers: document.getElementById('settingShowOthers').checked
             });
 
             try {
-                await stateMgr.update({
-                    config: {
-                        ...currentConfig,
-                        showOthers: document.getElementById('settingShowOthers').checked
-                    }
-                });
-
-                const bulkSplit = parseInt(settingBulkSplit.value, 10);
-                if (bulkSplit >= 1 && bulkSplit <= 6) {
-                    const result = await stateMgr.applyBulkSplitCount(bulkSplit);
-                    if (result) {
-                        alert(`一括分割設定を適用しました（変更 ${result.changedBays} 間口 / 制約で据え置き ${result.constrainedBays} 間口）`);
-                    }
-                }
-                settingBulkSplit.value = '';
-
                 hideSetup();
                 render(stateMgr.state);
+                alert('この端末の表示設定を保存しました。他の端末には影響しません。');
             } catch (error) {
-                console.error('表示・運用設定の保存に失敗しました:', error);
-                alert('表示・運用設定の保存に失敗しました。通信状態をご確認ください。');
+                console.error('この端末の表示設定の保存に失敗しました:', error);
+                alert('この端末の表示設定を保存できませんでした。ブラウザの保存領域または端末設定をご確認ください。');
             }
         });
 
         saveAdvancedSettingsBtn.addEventListener('click', async () => {
+            updateGlobalSettingsLoadWarning();
+            if (stateMgr.globalLayoutSettingsLoadFailed) {
+                alert('全端末共通のレイアウト設定を取得できないため保存できません。通信復帰後に再読み込みしてください。');
+                return;
+            }
             const currentConfig = stateMgr.state?.config || {};
             const nextBays = parseInt(settingBays.value, 10) || 9;
             const oldBays = parseInt(currentConfig.bays, 10) || null;
@@ -262,14 +309,16 @@
                 if (!ok) return;
             }
 
+            // viewMode / multiRows / multiCols / showOthers は端末ごとの表示設定。
+            // 既存Firestore configに残っている値は互換用に保持するが、全端末共通設定の保存では更新しない。
             const newConfig = {
                 ...currentConfig,
                 bays: nextBays,
-                viewMode: settingViewMode.value,
+                viewMode: currentConfig.viewMode || 'multi',
                 orientation: settingOrientation.value,
-                multiRows: parseInt(settingMultiRows.value, 10) || 3,
-                multiCols: parseInt(settingMultiCols.value, 10) || 3,
-                showOthers: document.getElementById('settingShowOthers').checked,
+                multiRows: currentConfig.multiRows || 3,
+                multiCols: currentConfig.multiCols || 3,
+                showOthers: currentConfig.showOthers !== false,
                 maxSplit: 6,
                 pickMode: currentConfig.pickMode === 'VERIFY' ? 'VERIFY' : 'NORMAL',
                 quantityVerification: !!currentConfig.quantityVerification
@@ -277,12 +326,21 @@
 
             try {
                 await stateMgr.update({ config: newConfig });
+                const bulkSplit = parseInt(settingBulkSplit.value, 10);
+                if (bulkSplit >= 1 && bulkSplit <= 6) {
+                    const result = await stateMgr.applyBulkSplitCount(bulkSplit);
+                    if (result) {
+                        alert(`一括分割設定を適用しました（変更 ${result.changedBays} 間口 / 制約で据え置き ${result.constrainedBays} 間口）`);
+                    }
+                }
+                settingBulkSplit.value = '';
                 hideSetup();
+                alert('全端末共通のレイアウト設定を保存しました。スマホ・タブレットを含む全WALL画面に反映されます。');
                 currentSingleBayId = null;
                 render(stateMgr.state);
             } catch (error) {
-                console.error('詳細設定の保存に失敗しました:', error);
-                alert('詳細設定の保存に失敗しました。通信状態をご確認ください。');
+                console.error('全端末共通のレイアウト設定の保存に失敗しました:', error);
+                alert('全端末共通のレイアウト設定の保存に失敗しました。通信状態をご確認ください。');
             }
         });
 
@@ -586,12 +644,13 @@
             saveAdvancedSettingsBtn.dataset.baysRiskBlocked = riskBlocked ? 'true' : 'false';
             if (riskBlocked) {
                 saveAdvancedSettingsBtn.disabled = true;
-                saveAdvancedSettingsBtn.textContent = '詳細設定を保存できません';
+                saveAdvancedSettingsBtn.textContent = '全端末共通設定を保存できません';
                 return;
             }
             if (saveAdvancedSettingsBtn.dataset.otherValidationBlocked === 'true') return;
+            if (saveAdvancedSettingsBtn.dataset.globalLoadBlocked === 'true') return;
             saveAdvancedSettingsBtn.disabled = false;
-            saveAdvancedSettingsBtn.textContent = '詳細設定を保存';
+            saveAdvancedSettingsBtn.textContent = '全端末共通のレイアウト設定を保存';
         };
 
         const refreshBaysRiskUi = () => {
@@ -990,7 +1049,7 @@
         };
 
         const getIndicators = (state, slotKey) => {
-            const config = state.config || {};
+            const config = getEffectiveWallConfig(state);
             const showOthers = config.showOthers !== false;
             const indicators = [];
 
@@ -1539,7 +1598,8 @@
         const render = (state) => {
             const renderStart = performance.now();
             countRender("wall");
-            const config = state?.config || {};
+            const config = getEffectiveWallConfig(state);
+            updateGlobalSettingsLoadWarning();
             const deviceSettings = getDeviceWallSettings();
             const displayScale = ['S', 'M', 'L'].includes(deviceSettings.displayScale) ? deviceSettings.displayScale : 'M';
             const denseTextMode = deviceSettings.denseTextMode !== false;
@@ -1563,6 +1623,23 @@
             });
             try {
             if (!state) return;
+            if (state.__isOfflineFallbackState) {
+                showOfflineFallbackNotice();
+                updateGlobalSettingsLoadWarning();
+                if (!offlineFallbackSetupShown) {
+                    showSetup(true);
+                    offlineFallbackSetupShown = true;
+                }
+                wallHeader.classList.add('hidden');
+                multiViewContainer.classList.add('hidden');
+                selectorViewContainer.classList.add('hidden');
+                singleViewContainer.classList.add('hidden');
+                bay10Container.classList.add('hidden');
+                homeBtn.classList.remove('hidden');
+                return;
+            }
+            offlineFallbackSetupShown = false;
+            hideOfflineFallbackNotice();
             updateInstructionBanner(state);
             const verifyConfig = getVerifyConfig(state);
             const getViewMaxSplit = () => {
@@ -1803,10 +1880,10 @@
                 perf?.mark("wall.render.end", {
                     durationMs: Math.round(performance.now() - renderStart),
                     mode: state?.mode || null,
-                    viewMode: (state?.config || {}).viewMode || null,
+                    viewMode: getEffectiveWallConfig(state).viewMode || null,
                     bays: (state?.config || {}).bays || 0,
-                    multiRows: (state?.config || {}).multiRows || null,
-                    multiCols: (state?.config || {}).multiCols || null,
+                    multiRows: getEffectiveWallConfig(state).multiRows || null,
+                    multiCols: getEffectiveWallConfig(state).multiCols || null,
                     currentSingleBayId,
                     slotsCount: Object.keys(state?.slots || {}).length,
                     splitsCount: Object.keys(state?.splits || {}).length,
