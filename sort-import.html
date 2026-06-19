@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>卸仕分け 取込</title>
+  <link rel="stylesheet" href="css/style.css?v=sort-20260601b">
+</head>
+<body class="sort-import-body">
+  <div class="sort-page">
+    <header class="sort-header">
+      <div>
+        <h2>卸仕分け 取込</h2>
+        <p class="sort-note">列番号は1始まりです。A列=1、B列=2、C列=3として指定してください。</p>
+      </div>
+      <div class="sort-nav">
+        <a class="btn btn-outline" href="index.html">HOMEへ戻る</a>
+        <a class="btn btn-outline" href="sort-scan.html">PCスキャン画面へ</a>
+        <a class="btn btn-outline" href="sort-wall.html">仕分け先表示画面へ</a>
+      </div>
+    </header>
+
+    <main class="sort-main">
+      <div class="card sort-card">
+        <label class="sort-field sort-file-field" for="csvFile">
+          <span class="sort-field-label">CSV / Excelファイル</span>
+          <input id="csvFile" type="file" accept=".csv,.xlsx,.xls">
+        </label>
+
+        <section class="sort-column-section" aria-labelledby="requiredColsHeading">
+          <h3 id="requiredColsHeading">必須列</h3>
+          <div class="sort-form-grid">
+            <label class="sort-field" for="colJan">
+              <span class="sort-field-label">バーコード列</span>
+              <input id="colJan" type="number" min="1" placeholder="例: 1">
+            </label>
+            <label class="sort-field" for="colDest">
+              <span class="sort-field-label">仕分け先名列</span>
+              <input id="colDest" type="number" min="1" placeholder="例: 2">
+            </label>
+            <label class="sort-field" for="colQty">
+              <span class="sort-field-label">数量列</span>
+              <input id="colQty" type="number" min="1" placeholder="例: 3">
+            </label>
+          </div>
+        </section>
+
+        <section class="sort-column-section" aria-labelledby="optionalColsHeading">
+          <h3 id="optionalColsHeading">任意列</h3>
+          <div class="sort-form-grid">
+            <label class="sort-field" for="colLabel">
+              <span class="sort-field-label">商品表示名列</span>
+              <input id="colLabel" type="number" min="1" placeholder="任意">
+            </label>
+            <label class="sort-field" for="colDestCode">
+              <span class="sort-field-label">仕分け先コード列</span>
+              <input id="colDestCode" type="number" min="1" placeholder="任意">
+            </label>
+          </div>
+        </section>
+
+        <div class="sort-actions">
+          <button id="saveColumnSettingsBtn" class="btn btn-outline" type="button">列設定を保存</button>
+          <button id="clearColumnSettingsBtn" class="btn btn-outline" type="button">列設定をクリア</button>
+        </div>
+
+        <div class="sort-actions">
+          <button id="importBtn" class="btn btn-primary">取込・バッチ開始</button>
+          <button id="resetBtn" class="btn btn-danger">卸仕分けデータリセット</button>
+        </div>
+        <div id="msg" class="sort-message"></div>
+      </div>
+
+      <div class="card sort-card">
+        <h3>プレビュー</h3>
+        <pre id="preview" class="sort-preview"></pre>
+      </div>
+
+      <div class="card sort-card">
+        <h3>警告</h3>
+        <pre id="warningsPreview" class="sort-preview sort-warnings-preview">警告はありません</pre>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/sort-state-manager.js?v=sort-20260527c"></script>
+  <script src="js/pages/sort-import.js?v=sort-20260601b"></script>
+</body>
+</html>

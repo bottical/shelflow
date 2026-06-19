@@ -16,6 +16,21 @@
 
         let lastRenderedPickingNo = null;
         let lastRenderedAllCompleted = false;
+
+        const perf = window.__shelflowPerf;
+        let renderCountWindow = { startedAt: performance.now(), count: 0, lastCountPerSec: 0 };
+        const countRender = (pageName) => {
+            const now = performance.now();
+            renderCountWindow.count += 1;
+            if (now - renderCountWindow.startedAt > 1000) {
+                const count = renderCountWindow.count;
+                renderCountWindow.lastCountPerSec = count;
+                perf?.mark(`${pageName}.render.rate`, { countPerSec: count });
+                if (count >= 5) console.warn(`[${pageName}] high render rate`, count);
+                renderCountWindow = { startedAt: now, count: 0, lastCountPerSec: count };
+            }
+        };
+
         const stateMgr = new StateManager(
             (state) => render(state),
             (user) => {
@@ -246,6 +261,7 @@
         };
 
         const consumeByJan = async (inputJan) => {
+            const janOpStart = performance.now();
             const jan = stateMgr.normalizeJanValue(inputJan);
             if (!jan) return;
             const currentUserState = stateMgr.state?.userStates?.[stateMgr.currentUserId] || {};
@@ -256,6 +272,8 @@
                 return;
             }
             const cfg = getConfig();
+            const quantityVerification = !!cfg.quantityVerification;
+            perf?.mark('pick.verify.jan.start', { currentPickingNo, lineIndex: null, janLast4: jan.slice(-4), quantityVerification, elapsedMs: 0 });
             const remoteLines = stateMgr.currentPickList?.lines || [];
             const mergedLines = stateMgr.getMergedPickLines(currentPickingNo, remoteLines);
             const matched = findNextConsumableLineIndex(mergedLines, jan);
@@ -271,6 +289,7 @@
 
             const nextLine = buildOptimisticConsumedLine(mergedLines[matched.index], cfg.quantityVerification);
             const opId = stateMgr.setOptimisticPickLine(currentPickingNo, matched.index, nextLine);
+            perf?.mark('pick.verify.jan.optimistic.set', { currentPickingNo, lineIndex: matched.index, janLast4: jan.slice(-4), quantityVerification, elapsedMs: Math.round(performance.now() - janOpStart) });
             AudioManager.playStartSound();
             
             if (nextLine.status === 'DONE') {
@@ -309,11 +328,13 @@
                 stateMgr.clearOptimisticPickLine(currentPickingNo, matched.index, opId);
                 AudioManager.playErrorSound();
                 showJanFeedback(result?.result === 'already_done' ? '既に完了済みです' : 'このピッキングNo.の対象外です', 'error');
+                perf?.mark('pick.verify.jan.failed', { currentPickingNo, lineIndex: matched.index, janLast4: jan.slice(-4), quantityVerification, elapsedMs: Math.round(performance.now() - janOpStart), result: result?.result || 'not_found' });
             }).catch((e) => {
                 console.error('consumeByJan failed:', e);
                 stateMgr.clearOptimisticPickLine(currentPickingNo, matched.index, opId);
                 AudioManager.playErrorSound();
                 showJanFeedback('JAN処理に失敗しました', 'error');
+                perf?.mark('pick.verify.jan.failed', { currentPickingNo, lineIndex: matched.index, janLast4: jan.slice(-4), quantityVerification, elapsedMs: Math.round(performance.now() - janOpStart), message: e?.message || String(e) });
                 render(stateMgr.state || {});
             });
         };
@@ -332,16 +353,27 @@
         };
 
         const render = (state) => {
+            const renderStart = performance.now();
+            countRender("pick");
+            const cfg = getConfig(state);
+            const currentUserState = state?.userStates?.[stateMgr.currentUserId] || {};
+            const currentPickingNo = currentUserState.currentPickingNo || null;
+            const currentPickLines = stateMgr.currentPickList?.lines || null;
+            perf?.mark("pick.render.start", {
+                currentPickingNo,
+                currentPickListId: stateMgr.currentPickListId || null,
+                currentPickListLoading: !!stateMgr.currentPickListLoading,
+                currentPickLinesCount: Array.isArray(currentPickLines) ? currentPickLines.length : 0,
+                optimisticPickLineOpsCount: Object.keys(stateMgr.localUiState.optimisticPickLineOps?.[String(currentPickingNo || '')] || {}).length,
+                pickMode: cfg.pickMode,
+                quantityVerification: cfg.quantityVerification
+            });
+            try {
             const progressSummary = state?.progressSummary || { total: 0, completed: 0 };
             updateProgressUi(progressSummary);
             updateUserSelectorUI();
             updateModeUI(state);
-            const cfg = getConfig(state);
-            const currentUserState = state.userStates?.[stateMgr.currentUserId] || {};
-            const currentPickingNo = currentUserState.currentPickingNo;
-
             pickTable.innerHTML = '';
-            const currentPickLines = stateMgr.currentPickList?.lines || null;
             if (!currentPickingNo) {
                 lastRenderedPickingNo = currentPickingNo || null;
                 lastRenderedAllCompleted = false;
@@ -351,9 +383,16 @@
                 restoreFocusIfNeeded(state);
                 return;
             }
-            if (stateMgr.currentPickListLoading) {
-                pickTable.innerHTML = `<tr><td colspan="5" style="padding:3rem; text-align:center; color:var(--text-muted);">読込中...</td></tr>`;
-                currentListTitle.textContent = `ピッキングNo. ${currentPickingNo} を読込中...`;
+            const isPickListSwitching =
+                !!currentPickingNo &&
+                (
+                    stateMgr.currentPickListLoading ||
+                    !stateMgr.currentPickListId ||
+                    String(stateMgr.currentPickListId) !== String(currentPickingNo)
+                );
+            if (isPickListSwitching) {
+                pickTable.innerHTML = `<tr><td colspan="5" style="padding:3rem; text-align:center; color:var(--text-muted);">ピッキングリストを同期しています...</td></tr>`;
+                currentListTitle.textContent = `ピッキングNo. ${currentPickingNo} を同期中...`;
                 restoreFocusIfNeeded(state);
                 return;
             }
@@ -425,19 +464,39 @@
             });
 
             restoreFocusIfNeeded(state);
+            } finally {
+                perf?.mark("pick.render.end", {
+                    durationMs: Math.round(performance.now() - renderStart),
+                    currentPickingNo,
+                    currentPickListId: stateMgr.currentPickListId || null,
+                    currentPickListLoading: !!stateMgr.currentPickListLoading,
+                    currentPickLinesCount: Array.isArray(stateMgr.currentPickList?.lines) ? stateMgr.currentPickList.lines.length : 0,
+                    optimisticPickLineOpsCount: Object.keys(stateMgr.localUiState.optimisticPickLineOps?.[String(currentPickingNo || '')] || {}).length,
+                    pickMode: cfg.pickMode,
+                    quantityVerification: cfg.quantityVerification
+                });
+            }
         };
 
         const completeLine = async (index) => {
+            const opStart = performance.now();
             const currentUserState = stateMgr.state.userStates?.[stateMgr.currentUserId];
             const currentPickingNo = currentUserState?.currentPickingNo;
             if (!currentPickingNo) return;
+            const lineIndex = Number(index);
+            const line = stateMgr.getMergedPickLines(currentPickingNo, stateMgr.currentPickList?.lines || [])[lineIndex] || {};
+            const janLast4 = String(line?.jan || '').slice(-4);
+            const quantityVerification = !!getConfig().quantityVerification;
+            perf?.mark('pick.complete.button.start', { currentPickingNo, lineIndex, janLast4, quantityVerification, elapsedMs: 0 });
 
             try {
-                await stateMgr.completePickLine(currentPickingNo, Number(index));
+                await stateMgr.completePickLine(currentPickingNo, lineIndex);
+                perf?.mark('pick.complete.button.success', { currentPickingNo, lineIndex, janLast4, quantityVerification, elapsedMs: Math.round(performance.now() - opStart) });
             } catch (e) {
                 console.error('completeLine failed:', e);
                 AudioManager?.playErrorSound?.();
                 showInlineError('完了処理に失敗しました。通信状態をご確認ください。');
+                perf?.mark('pick.complete.button.failed', { currentPickingNo, lineIndex, janLast4, quantityVerification, elapsedMs: Math.round(performance.now() - opStart), message: e?.message || String(e) });
             }
         };
 

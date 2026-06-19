@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>卸仕分け スキャン</title>
+  <link rel="stylesheet" href="css/style.css?v=sort-20260601b">
+</head>
+<body class="sort-import-body">
+  <div class="sort-page">
+    <header class="sort-header">
+      <div>
+        <h2>卸仕分け スキャン</h2>
+        <p class="sort-note">PC側でバーコードを読み取り、仕分け先表示画面へ現在SKUを同期します。</p>
+      </div>
+      <div class="sort-nav">
+        <a class="btn btn-outline" href="index.html">HOMEへ戻る</a>
+        <a class="btn btn-outline" href="sort-import.html">仕分け取込へ</a>
+        <a class="btn btn-outline" href="sort-wall.html">仕分け先表示画面へ</a>
+      </div>
+    </header>
+
+    <main class="sort-main">
+      <div class="card sort-card">
+        <h3>バーコードスキャン</h3>
+        <input id="scanInput" class="sort-scan-input" placeholder="バーコードをスキャン" autofocus>
+        <div id="err" class="sort-message"></div>
+      </div>
+
+      <div class="card sort-card">
+        <h3>現在SKU</h3>
+        <div id="current"></div>
+      </div>
+
+      <div class="card sort-card">
+        <h3>直前SKUステータス</h3>
+        <div id="previous"></div>
+        <div class="sort-note sort-scan-note">※直前SKUステータスは最終同期時点の参考表示です。</div>
+      </div>
+
+      <div class="sort-actions">
+        <button id="dlBtn" class="btn btn-primary">簡易実績CSVダウンロード</button>
+        <button id="resetBtn" class="btn btn-danger">仕分けデータリセット</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/audio-manager.js?v=perf-20260429a"></script>
+  <script src="js/sort-state-manager.js?v=sort-20260527c"></script>
+  <script src="js/pages/sort-scan.js?v=sort-20260601b"></script>
+</body>
+</html>

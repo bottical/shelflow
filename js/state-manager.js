@@ -1,5 +1,42 @@
 // StateManager (Non-module version)
 // Depends on firebase-app.js, firebase-auth.js, and firebase-firestore.js (compat versions)
+window.__shelflowPerf = window.__shelflowPerf || {
+    events: [],
+    max: 500,
+    mark(name, data = {}) {
+        const appVersion = window.APP_VERSION || document.documentElement?.dataset?.appVersion || null;
+        const entry = {
+            name,
+            data,
+            t: performance.now(),
+            at: Date.now(),
+            page: location.pathname,
+            ua: navigator.userAgent,
+            visibility: document.visibilityState,
+            appVersion
+        };
+        this.events.push(entry);
+        if (this.events.length > this.max) this.events.shift();
+        if (localStorage.getItem('shelflow_perf_enabled') === '1') {
+            console.debug('[perf]', name, data);
+        }
+        return entry;
+    },
+    table() {
+        console.table(this.events.map((e, i) => ({
+            i,
+            name: e.name,
+            dt: i > 0 ? Math.round(e.t - this.events[i - 1].t) : 0,
+            t: Math.round(e.t),
+            at: e.at,
+            page: e.page,
+            ...e.data
+        })));
+    },
+    clear() {
+        this.events = [];
+    }
+};
 
 function StateManager(onStateChange, onUserChange) {
     this.onStateChange = onStateChange;
@@ -57,6 +94,13 @@ function StateManager(onStateChange, onUserChange) {
         optimisticPickLineOps: {},
         transientWallError: null,
         lastOpSeq: 0
+    };
+    this._diag = {
+        latestStateSnapshotAt: 0,
+        latestPickListSnapshotAt: 0,
+        latestStateDocApproxSize: 0,
+        latestPickListApproxSize: 0,
+        latestPickListLinesCount: 0
     };
 }
 
@@ -735,8 +779,26 @@ StateManager.prototype.subscribeToState = function (uid) {
     const docRef = this._getStateDocRef(uid);
 
     this.unsubscribeState = docRef.onSnapshot((doc) => {
+        const perf = window.__shelflowPerf;
+        const snapStart = performance.now();
+        perf?.mark('state.snapshot.start', { uid, currentUserId: this.currentUserId });
         if (doc.exists) {
             const data = doc.data();
+            let approxSize = null;
+            try { approxSize = JSON.stringify(data).length; } catch (_) { approxSize = null; }
+            this._diag.latestStateSnapshotAt = Date.now();
+            this._diag.latestStateDocApproxSize = approxSize || 0;
+            perf?.mark('state.snapshot.data', {
+                exists: doc.exists,
+                stateDocSizeApprox: approxSize,
+                mode: data?.mode || null,
+                slotsCount: Object.keys(data?.slots || {}).length,
+                injectListCount: Object.keys(data?.injectList || {}).length,
+                janIndexCount: Object.keys(data?.janIndex || {}).length,
+                userStatesCount: Object.keys(data?.userStates || {}).length,
+                currentPickingNo: data?.userStates?.[this.currentUserId]?.currentPickingNo || null,
+                currentPickListId: this.currentPickListId
+            });
             this._migrateLegacyPickListsIfNeeded(uid, data);
             this._backfillProgressSummaryIfNeeded(uid, data);
             this._backfillProgressCountedCompletedIfNeeded(uid, data);
@@ -750,11 +812,20 @@ StateManager.prototype.subscribeToState = function (uid) {
                     this.subscribeToPickList(currentPickingNo);
                 }
                 this._reconcileLocalUiStateWithRemote(data);
+                perf?.mark('state.onStateChange.before', { hasOnStateChange: !!this.onStateChange });
                 if (this.onStateChange) this.onStateChange(this.state);
+                perf?.mark('state.onStateChange.after', {
+                    durationMs: Math.round(performance.now() - snapStart),
+                    onStateChangeExecuted: !!this.onStateChange
+                });
             }
         } else {
             this.initializeNewSession(uid);
         }
+        perf?.mark('state.snapshot.end', {
+            durationMs: Math.round(performance.now() - snapStart),
+            exists: doc.exists
+        });
     }, (error) => {
         this._logFirestoreError('subscribeToState', error, uid);
     });
@@ -849,25 +920,60 @@ StateManager.prototype.subscribeToPickList = function (listId) {
         return;
     }
     if (this.currentPickListId === normalizedListId && this.unsubscribePickList) return;
+    const perf = window.__shelflowPerf;
+    const previousPickListId = this.currentPickListId;
     this.clearPickListSubscription();
-
     this.currentPickListId = normalizedListId;
+    perf?.mark('pickList.subscribe.start', {
+        normalizedListId,
+        previousPickListId
+    });
     this.currentPickListLoading = true;
     this.currentPickListNotFound = false;
     const docRef = this._getPickListDocRef(this.user.uid, normalizedListId);
     this.unsubscribePickList = docRef.onSnapshot((doc) => {
+        const snapStart = performance.now();
+        const raw = doc.exists ? (doc.data() || {}) : null;
+        const approxSize = raw ? JSON.stringify(raw).length : 0;
         if (!doc.exists) {
             this.currentPickList = null;
         } else {
-            const data = doc.data() || {};
             this.currentPickList = {
-                ...data,
-                lines: this._normalizePickLines(data.lines || [])
+                ...raw,
+                lines: this._normalizePickLines(raw.lines || [])
             };
+            this._diag.latestPickListApproxSize = approxSize;
+            this._diag.latestPickListLinesCount = Array.isArray(raw.lines) ? raw.lines.length : 0;
+        }
+        this._diag.latestPickListSnapshotAt = Date.now();
+        const staleSnapshot = this.currentPickListId !== normalizedListId;
+        perf?.mark('pickList.snapshot', {
+            normalizedListId,
+            exists: doc.exists,
+            approxSize,
+            linesCount: Array.isArray(raw?.lines) ? raw.lines.length : 0,
+            loading: this.currentPickListLoading,
+            currentPickListId: this.currentPickListId,
+            staleSnapshot
+        });
+        if (staleSnapshot) {
+            perf?.mark('pickList.snapshot.stale', {
+                normalizedListId,
+                currentPickListId: this.currentPickListId,
+                approxSize
+            });
+            console.warn('[pickList] stale snapshot detected', {
+                normalizedListId,
+                currentPickListId: this.currentPickListId
+            });
         }
         this.currentPickListLoading = false;
         this.currentPickListNotFound = !doc.exists;
         this._notifyUiOnlyChange();
+        perf?.mark('pickList.snapshot.after', {
+            normalizedListId,
+            durationMs: Math.round(performance.now() - snapStart)
+        });
     }, (error) => {
         this.currentPickListLoading = false;
         console.error('[firestore:subscribeToPickList] failed', error);
@@ -1471,8 +1577,17 @@ StateManager.prototype.startPicking = function (listId, activePickData) {
 StateManager.prototype.resetPreserveConfig = function () {
     if (!this.user) return Promise.reject("Not authenticated");
 
-    const current = this.state || {};
+    if (!this.state || !this.state.config) {
+        return Promise.reject(new Error("状態を読み込み中です。少し待ってから再度リセットしてください。"));
+    }
+
+    const current = this.state;
     const currentConfig = current.config || {};
+
+    if (!['portrait', 'landscape'].includes(currentConfig.orientation)) {
+        return Promise.reject(new Error("縦横設定を取得できませんでした。状態読込後に再度リセットしてください。"));
+    }
+
     const totalBays = currentConfig.bays || 9;
 
     const splits = {};
@@ -1486,10 +1601,10 @@ StateManager.prototype.resetPreserveConfig = function () {
             bays: totalBays,
             maxSplit: currentConfig.maxSplit || 6,
             viewMode: currentConfig.viewMode || 'multi',
-            orientation: currentConfig.orientation || 'landscape',
+            orientation: currentConfig.orientation,
             multiRows: currentConfig.multiRows || 3,
             multiCols: currentConfig.multiCols || 3,
-            showOthers: !!currentConfig.showOthers,
+            showOthers: currentConfig.showOthers !== false,
             pickMode: currentConfig.pickMode === 'VERIFY' ? 'VERIFY' : 'NORMAL',
             quantityVerification: !!currentConfig.quantityVerification,
             csvFormat: currentConfig.csvFormat || undefined
@@ -1498,6 +1613,11 @@ StateManager.prototype.resetPreserveConfig = function () {
         splits,
         injectList: {},
         janIndex: {},
+        pickListSource: null,
+        progressSummary: {
+            total: 0,
+            completed: 0
+        },
         userStates: {
             user1: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
             user2: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
@@ -1532,13 +1652,25 @@ StateManager.prototype.reset = function () {
 
 StateManager.prototype.completePickLine = function (listId, index) {
     if (!this.user || !listId) return Promise.reject("Not authenticated");
+    const perf = window.__shelflowPerf;
     const uid = this.user.uid;
+    const txStart = performance.now();
+    const txMetrics = { linesCount: 0, activePickCount: 0, janLast4: null };
+    perf?.mark('pick.transaction.start', { listId, slotKey: null, lineIndex: index, janLast4: null, linesCount: 0, activePickCount: 0, elapsedMs: 0 });
     return this.db.runTransaction(async (transaction) => {
         const listRef = this._getPickListDocRef(uid, listId);
         const stateRef = this._getStateDocRef(uid);
-        const [listDoc, stateDoc] = await Promise.all([transaction.get(listRef), transaction.get(stateRef)]);
-        if (!listDoc.exists || !stateDoc.exists) return;
-        const pickListData = listDoc.data() || {};
+        perf?.mark('pick.transaction.getPickList.start', { listId, slotKey: null, lineIndex: index, janLast4: null, linesCount: 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart) });
+        const listDoc = await transaction.get(listRef);
+        const pickListData = listDoc.exists ? (listDoc.data() || {}) : {};
+        const rawLines = pickListData.lines || [];
+        perf?.mark('pick.transaction.getPickList.end', { listId, slotKey: null, lineIndex: index, janLast4: null, linesCount: Array.isArray(rawLines) ? rawLines.length : 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart) });
+        perf?.mark('pick.transaction.getState.skipped', { listId, slotKey: null, lineIndex: index, janLast4: null, linesCount: Array.isArray(rawLines) ? rawLines.length : 0, activePickCount: 0, reason: 'activePick_built_from_current_memory_state', elapsedMs: Math.round(performance.now() - txStart) });
+        // NOTE: activePick is rebuilt without reading states/current in this transaction.
+        // This optimization assumes slot placement (janIndex/slots) is mostly stable during picking.
+        // If inject and pick run concurrently, activePick can temporarily reflect stale janIndex.
+        // Source of truth is pickLists/{listId}.lines; activePick is derived UI state.
+        if (!listDoc.exists) return;
         const lines = this._normalizePickLines(pickListData.lines || []);
         if (!lines[index] || this._isLineCompleted(lines[index])) return;
         const beforeLines = [...lines];
@@ -1549,8 +1681,7 @@ StateManager.prototype.completePickLine = function (listId, index) {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
-        const data = stateDoc.data() || {};
-        const janIndex = data.janIndex || {};
+        const janIndex = this.state?.janIndex || {};
         const activePick = this._buildActivePickFromLines(listId, lines, janIndex);
         const stateUpdates = {
             [`userStates.${this.currentUserId}.activePick`]: activePick,
@@ -1558,22 +1689,40 @@ StateManager.prototype.completePickLine = function (listId, index) {
         };
         const counted = this._applyCompletedCountOnFirstCompletion(stateUpdates, pickListData, beforeLines, lines);
         if (counted) listUpdates.progressCountedCompleted = true;
+        const activePickCount = Object.values(activePick || {}).filter((entry) => (Number(entry?.pendingQty) || 0) > 0).length;
+        txMetrics.linesCount = lines.length;
+        txMetrics.activePickCount = activePickCount;
+        txMetrics.janLast4 = String(lines[index]?.jan || '').slice(-4);
+        perf?.mark('pick.transaction.updateQueued', { listId, slotKey: null, lineIndex: index, janLast4: txMetrics.janLast4, linesCount: txMetrics.linesCount, activePickCount, elapsedMs: Math.round(performance.now() - txStart) });
         transaction.update(listRef, listUpdates);
         transaction.update(stateRef, stateUpdates);
+    }).then((result) => {
+        perf?.mark('pick.transaction.success', { listId, slotKey: null, lineIndex: index, janLast4: txMetrics.janLast4, linesCount: txMetrics.linesCount, activePickCount: txMetrics.activePickCount, elapsedMs: Math.round(performance.now() - txStart) });
+        return result;
+    }).catch((error) => {
+        perf?.mark('pick.transaction.failed', { listId, slotKey: null, lineIndex: index, janLast4: null, linesCount: 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart), message: error?.message || String(error) });
+        throw error;
     });
 };
 
 StateManager.prototype.completePickBySlot = function (listId, slotKey) {
     if (!this.user || !listId) return Promise.reject("Not authenticated");
+    const perf = window.__shelflowPerf;
     const uid = this.user.uid;
+    const txStart = performance.now();
+    const txMetrics = { linesCount: 0, activePickCount: 0 };
+    perf?.mark('pick.transaction.start', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: 0, activePickCount: 0, elapsedMs: 0 });
     return this.db.runTransaction(async (transaction) => {
         const listRef = this._getPickListDocRef(uid, listId);
         const stateRef = this._getStateDocRef(uid);
-        const [listDoc, stateDoc] = await Promise.all([transaction.get(listRef), transaction.get(stateRef)]);
-        if (!listDoc.exists || !stateDoc.exists) return;
-        const data = stateDoc.data() || {};
-        const janIndex = data.janIndex || {};
-        const pickListData = listDoc.data() || {};
+        perf?.mark('pick.transaction.getPickList.start', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart) });
+        const listDoc = await transaction.get(listRef);
+        const pickListData = listDoc.exists ? (listDoc.data() || {}) : {};
+        const rawLines = pickListData.lines || [];
+        perf?.mark('pick.transaction.getPickList.end', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: Array.isArray(rawLines) ? rawLines.length : 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart) });
+        perf?.mark('pick.transaction.getState.skipped', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: Array.isArray(rawLines) ? rawLines.length : 0, activePickCount: 0, reason: 'activePick_built_from_current_memory_state', elapsedMs: Math.round(performance.now() - txStart) });
+        if (!listDoc.exists) return;
+        const janIndex = this.state?.janIndex || {};
         const lines = this._normalizePickLines(pickListData.lines || []);
         const beforeLines = [...lines];
         let changed = false;
@@ -1586,21 +1735,26 @@ StateManager.prototype.completePickBySlot = function (listId, slotKey) {
             return { ...line, checkedQty: targetQty, status: 'DONE' };
         });
         if (!changed) return;
-        const listUpdates = {
-            lines: nextLines,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
+        const listUpdates = { lines: nextLines, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
         const activePick = this._buildActivePickFromLines(listId, nextLines, janIndex);
-        const stateUpdates = {
-            [`userStates.${this.currentUserId}.activePick`]: activePick,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
+        const stateUpdates = { [`userStates.${this.currentUserId}.activePick`]: activePick, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
         const counted = this._applyCompletedCountOnFirstCompletion(stateUpdates, pickListData, beforeLines, nextLines);
         if (counted) listUpdates.progressCountedCompleted = true;
+        const activePickCount = Object.values(activePick || {}).filter((entry) => (Number(entry?.pendingQty) || 0) > 0).length;
+        txMetrics.linesCount = nextLines.length;
+        txMetrics.activePickCount = activePickCount;
+        perf?.mark('pick.transaction.updateQueued', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: txMetrics.linesCount, activePickCount, elapsedMs: Math.round(performance.now() - txStart) });
         transaction.update(listRef, listUpdates);
         transaction.update(stateRef, stateUpdates);
+    }).then((result) => {
+        perf?.mark('pick.transaction.success', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: txMetrics.linesCount, activePickCount: txMetrics.activePickCount, elapsedMs: Math.round(performance.now() - txStart) });
+        return result;
+    }).catch((error) => {
+        perf?.mark('pick.transaction.failed', { listId, slotKey, lineIndex: null, janLast4: null, linesCount: 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart), message: error?.message || String(error) });
+        throw error;
     });
 };
+
 
 // Login/Logout methods
 StateManager.prototype.login = function (email, password) {
@@ -1667,23 +1821,34 @@ StateManager.prototype._isPickListCompleted = function (lines) {
 
 StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
     if (!this.user || !listId || !jan) return Promise.reject("Not authenticated");
+    const perf = window.__shelflowPerf;
     const uid = this.user.uid;
+    const txStart = performance.now();
+    const txMetrics = { linesCount: 0, activePickCount: 0, lineIndex: null };
     const normalizedJan = this.normalizeJanValue(jan);
     if (!normalizedJan) return Promise.resolve({ result: 'not_found' });
     const forceQuantityVerification = options?.quantityVerification;
+    perf?.mark('pick.transaction.start', { listId, slotKey: null, lineIndex: null, janLast4: normalizedJan.slice(-4), linesCount: 0, activePickCount: 0, elapsedMs: 0 });
     return this.db.runTransaction(async (transaction) => {
         const listRef = this._getPickListDocRef(uid, listId);
         const stateRef = this._getStateDocRef(uid);
-        const [listDoc, stateDoc] = await Promise.all([transaction.get(listRef), transaction.get(stateRef)]);
-        if (!listDoc.exists || !stateDoc.exists) return { result: 'not_found' };
+        perf?.mark('pick.transaction.getPickList.start', { listId, slotKey: null, lineIndex: null, janLast4: normalizedJan.slice(-4), linesCount: 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart) });
+        const listDoc = await transaction.get(listRef);
+        const pickListData = listDoc.exists ? (listDoc.data() || {}) : {};
+        const rawLines = pickListData.lines || [];
+        perf?.mark('pick.transaction.getPickList.end', { listId, slotKey: null, lineIndex: null, janLast4: normalizedJan.slice(-4), linesCount: Array.isArray(rawLines) ? rawLines.length : 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart) });
+        perf?.mark('pick.transaction.getState.skipped', { listId, slotKey: null, lineIndex: null, janLast4: normalizedJan.slice(-4), linesCount: Array.isArray(rawLines) ? rawLines.length : 0, activePickCount: 0, reason: 'activePick_built_from_current_memory_state', elapsedMs: Math.round(performance.now() - txStart) });
+        // NOTE: activePick is rebuilt without reading states/current in this transaction.
+        // This optimization assumes slot placement (janIndex/slots) is mostly stable during picking.
+        // If inject and pick run concurrently, activePick can temporarily reflect stale janIndex.
+        // Source of truth is pickLists/{listId}.lines; activePick is derived UI state.
+        if (!listDoc.exists) return { result: 'not_found' };
 
-        const stateData = stateDoc.data() || {};
-        const janIndex = stateData.janIndex || {};
-        const config = stateData.config || {};
+        const janIndex = this.state?.janIndex || {};
+        const config = this.state?.config || {};
         const quantityVerification = typeof forceQuantityVerification === 'boolean'
             ? forceQuantityVerification
             : !!config.quantityVerification;
-        const pickListData = listDoc.data() || {};
         const lines = this._normalizePickLines(pickListData.lines || []);
         const beforeLines = [...lines];
 
@@ -1729,6 +1894,11 @@ StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
         };
         const counted = this._applyCompletedCountOnFirstCompletion(stateUpdates, pickListData, beforeLines, nextLines);
         if (counted) listUpdates.progressCountedCompleted = true;
+        const activePickCount = Object.values(activePick || {}).filter((entry) => (Number(entry?.pendingQty) || 0) > 0).length;
+        txMetrics.linesCount = nextLines.length;
+        txMetrics.activePickCount = activePickCount;
+        txMetrics.lineIndex = targetIndex;
+        perf?.mark('pick.transaction.updateQueued', { listId, slotKey: null, lineIndex: targetIndex, janLast4: normalizedJan.slice(-4), linesCount: txMetrics.linesCount, activePickCount, elapsedMs: Math.round(performance.now() - txStart) });
         transaction.update(listRef, listUpdates);
         transaction.update(stateRef, stateUpdates);
 
@@ -1738,6 +1908,12 @@ StateManager.prototype.consumePickByJan = function (listId, jan, options = {}) {
             nextLines,
             index: targetIndex
         };
+    }).then((result) => {
+        perf?.mark('pick.transaction.success', { listId, slotKey: null, lineIndex: result?.index ?? txMetrics.lineIndex, janLast4: normalizedJan.slice(-4), linesCount: txMetrics.linesCount, activePickCount: txMetrics.activePickCount, elapsedMs: Math.round(performance.now() - txStart) });
+        return result;
+    }).catch((error) => {
+        perf?.mark('pick.transaction.failed', { listId, slotKey: null, lineIndex: null, janLast4: normalizedJan.slice(-4), linesCount: 0, activePickCount: 0, elapsedMs: Math.round(performance.now() - txStart), message: error?.message || String(error) });
+        throw error;
     });
 };
 
@@ -1758,13 +1934,17 @@ StateManager.prototype.selectSlot = function (bayId, subId) {
     if (!pending || pending.status !== "WAITING_SLOT") return;
     if (!this.user) return;
 
+    const perf = window.__shelflowPerf;
     const slotKey = `${bayId}-${subId}`;
     const pendingJan = pending.jan;
+    const opStart = performance.now();
+    perf?.mark('inject.tap.start', { slotKey, janLast4: String(pendingJan || '').slice(-4), pendingRequestId: pending?.requestId || null });
     const pendingRequestId = pending.requestId || null;
     const uid = this.user.uid;
     const docRef = this._getStateDocRef(uid);
 
     const opId = this.setOptimisticSlot(slotKey, pendingJan);
+    perf?.mark('inject.optimisticSlot.set', { slotKey, opId, elapsedMs: Math.round(performance.now() - opStart) });
     this.clearLocalInjectPending();
 
     const isUnsyncedPendingError = (error) => {
@@ -1773,7 +1953,14 @@ StateManager.prototype.selectSlot = function (bayId, subId) {
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+    const maxRetries = 5;
     const attemptSelectSlot = async (retryCount) => {
+        const attemptNo = (maxRetries - retryCount) + 1;
+        perf?.mark('inject.transaction.attempt', {
+            slotKey, opId, attemptNo, retryCountRemaining: retryCount,
+            elapsedMs: Math.round(performance.now() - opStart),
+            pendingRequestId, janLast4: String(pendingJan || '').slice(-4)
+        });
         try {
             await this.db.runTransaction(async (transaction) => {
                 const doc = await transaction.get(docRef);
@@ -1820,6 +2007,11 @@ StateManager.prototype.selectSlot = function (bayId, subId) {
             });
         } catch (error) {
             if (isUnsyncedPendingError(error) && retryCount > 0) {
+                perf?.mark('inject.transaction.unsyncedPendingRetry', {
+                    slotKey, opId, attemptNo, retryCountRemaining: retryCount - 1,
+                    elapsedMs: Math.round(performance.now() - opStart),
+                    pendingRequestId, janLast4: String(pendingJan || '').slice(-4)
+                });
                 await sleep(200);
                 return attemptSelectSlot(retryCount - 1);
             }
@@ -1827,9 +2019,20 @@ StateManager.prototype.selectSlot = function (bayId, subId) {
         }
     };
 
-    return attemptSelectSlot(5).then(() => {
+    return attemptSelectSlot(maxRetries).then(() => {
         this.markOptimisticSlotCommitted(slotKey, opId);
+        perf?.mark('inject.transaction.success', {
+            slotKey, opId, attemptNo: null, retryCountRemaining: 0,
+            elapsedMs: Math.round(performance.now() - opStart),
+            pendingRequestId, janLast4: String(pendingJan || '').slice(-4)
+        });
     }).catch((error) => {
+        perf?.mark('inject.transaction.failed', {
+            slotKey, opId, attemptNo: null, retryCountRemaining: 0,
+            elapsedMs: Math.round(performance.now() - opStart),
+            pendingRequestId, janLast4: String(pendingJan || '').slice(-4),
+            code: error?.code, message: error?.message
+        });
         this.rollbackOptimisticInject(opId);
         const wasCancelled =
             pendingRequestId &&

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>仕分け先表示</title>
+  <link rel="stylesheet" href="css/style.css?v=sort-20260601b">
+</head>
+<body class="sort-wall sort-wall-mode">
+  <div class="sort-wall-root">
+    <header class="sort-wall-header">
+      <div>
+        <div class="sort-wall-title">仕分け先表示</div>
+        <div class="sort-wall-subtitle">卸仕分けモード</div>
+      </div>
+      <div class="sort-wall-nav">
+        <a class="btn btn-outline" href="index.html">HOME</a>
+        <a class="btn btn-outline" href="sort-import.html">取込</a>
+        <a class="btn btn-outline" href="sort-scan.html">PCスキャン</a>
+      </div>
+    </header>
+
+    <main class="sort-wall-main">
+      <section class="sort-wall-settings">
+        <button id="toggleCfg" class="btn btn-outline" type="button">端末設定</button>
+        <div id="cfgWrap" class="sort-wall-settings-panel">
+          <label class="sort-wall-field" for="start">
+            <span>表示開始番号</span>
+            <input id="start" type="number" min="1">
+          </label>
+          <label class="sort-wall-field" for="count">
+            <span>表示件数</span>
+            <input id="count" type="number" min="1">
+          </label>
+          <label class="sort-wall-field" for="scale">
+            <span>表示サイズ</span>
+            <select id="scale">
+              <option>S</option>
+              <option selected>M</option>
+              <option>L</option>
+            </select>
+          </label>
+          <div class="sort-wall-setting-actions">
+            <button id="save" class="btn btn-primary" type="button">端末設定保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sort-current-sku">
+        <div class="sort-current-sku-title">現在SKU</div>
+        <div id="sku" class="sort-current-sku-main">スキャン待機中</div>
+      </section>
+
+      <section id="cards" class="sort-wall-cards"></section>
+      <div id="err" class="sort-wall-error"></div>
+    </main>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <script src="js/sort-state-manager.js?v=sort-20260601c"></script>
+  <script src="js/pages/sort-wall.js?v=sort-20260601e"></script>
+</body>
+</html>

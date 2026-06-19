@@ -24,6 +24,21 @@
         const HIGHLIGHT_MS = 3000;
         let pendingSlotImportPreview = null;
 
+
+        const perf = window.__shelflowPerf;
+        let renderCountWindow = { startedAt: performance.now(), count: 0, lastCountPerSec: 0 };
+        const countRender = (pageName) => {
+            const now = performance.now();
+            renderCountWindow.count += 1;
+            if (now - renderCountWindow.startedAt > 1000) {
+                const count = renderCountWindow.count;
+                renderCountWindow.lastCountPerSec = count;
+                perf?.mark(`${pageName}.render.rate`, { countPerSec: count });
+                if (count >= 5) console.warn(`[${pageName}] high render rate`, count);
+                renderCountWindow = { startedAt: now, count: 0, lastCountPerSec: count };
+            }
+        };
+
         const stateMgr = new StateManager(
             (state) => {
                 if (!state) return;
@@ -470,9 +485,21 @@
         };
 
         const render = (state) => {
-            bayGrid.innerHTML = '';
+            const renderStart = performance.now();
+            countRender("inject");
+            const totalBays = state?.config?.bays || 9;
+            const pendingJan = stateMgr.getEffectiveInjectPendingForCurrentUser(state)?.jan || null;
+            perf?.mark("inject.render.start", {
+                mode: state?.mode || null,
+                bays: totalBays,
+                slotsCount: Object.keys(state?.slots || {}).length,
+                injectListCount: Object.keys(state?.injectList || {}).length,
+                pendingJanLast4: String(pendingJan || '').slice(-4) || null,
+                optimisticSlotsCount: Object.keys(stateMgr.localUiState.optimisticSlots || {}).length
+            });
+            try {
             const mergedSlots = getMergedSlots(state);
-            const totalBays = state.config?.bays || 9;
+            bayGrid.innerHTML = '';
             for (let b = 1; b <= totalBays; b++) {
                 const splits = state.splits?.[b];
                 const isConfigured = splits !== undefined;
@@ -585,6 +612,17 @@
                     </div>
                 `;
             }
+            } finally {
+                perf?.mark("inject.render.end", {
+                    durationMs: Math.round(performance.now() - renderStart),
+                    mode: state?.mode || null,
+                    bays: totalBays,
+                    slotsCount: Object.keys(state?.slots || {}).length,
+                    injectListCount: Object.keys(state?.injectList || {}).length,
+                    pendingJanLast4: String(stateMgr.getEffectiveInjectPendingForCurrentUser(state)?.jan || '').slice(-4) || null,
+                    optimisticSlotsCount: Object.keys(stateMgr.localUiState.optimisticSlots || {}).length
+                });
+            }
         };
 
         const showMessage = (text, type) => {
@@ -645,7 +683,7 @@
             alert('CSVの列取り込み設定を更新しました。');
         });
 
-        const processImportedRows = async (rows, format) => {
+        const processImportedRows = async (rows, format, sourceFile = null) => {
             const idxPick = format.pickCol - 1;
             const idxJan = format.janCol - 1;
             const idxQty = format.qtyCol - 1;
@@ -676,7 +714,15 @@
                 groupedPick[pickNo].push({ jan, qty, checkedQty: 0, status: 'PENDING' });
             });
 
-            const updates = { injectList: aggregatedInject };
+            const updates = {
+                injectList: aggregatedInject,
+                pickListSource: {
+                    fileName: sourceFile?.name || null,
+                    fileType: sourceFile?.type || '',
+                    fileSize: sourceFile?.size || 0,
+                    importedAt: Date.now()
+                }
+            };
             const currentSplits = stateMgr.state?.splits || {};
             const newSplits = { ...currentSplits };
             let needInit = false;
@@ -729,7 +775,7 @@
                             raw: false,
                             defval: ''
                         });
-                        await processImportedRows(rows, format);
+                        await processImportedRows(rows, format, file);
                     } catch (err) {
                         console.error('Excelファイルの解析に失敗しました:', err);
                         alert('Excelファイルの読み込みに失敗しました。ファイル形式をご確認ください。');
@@ -739,7 +785,7 @@
 
                 const text = e.target.result;
                 const lines = text.split(/\r?\n/).filter(x => x.trim());
-                await processImportedRows(lines, format);
+                await processImportedRows(lines, format, file);
             };
             if (isExcel) {
                 reader.readAsArrayBuffer(file);
