@@ -56,6 +56,7 @@ function StateManager(onStateChange, onUserChange) {
     this.progressCountedBackfillInFlight = false;
     this.progressCountedBackfillCompleted = false;
     this.progressCountedBackfillFailed = false;
+    this.globalLayoutSettingsLoadFailed = false;
 
     if (!firebase.apps.length) {
         firebase.initializeApp(firebaseConfig);
@@ -76,6 +77,7 @@ function StateManager(onStateChange, onUserChange) {
             this.progressCountedBackfillInFlight = false;
             this.progressCountedBackfillCompleted = false;
             this.progressCountedBackfillFailed = false;
+            this.globalLayoutSettingsLoadFailed = false;
             this.subscribeToState(user.uid);
         } else {
             if (this.unsubscribeState) this.unsubscribeState();
@@ -773,6 +775,30 @@ StateManager.prototype._logFirestoreError = function (action, error, uid) {
     });
 };
 
+StateManager.prototype._getWallGlobalSettingsCacheKey = function (uid) {
+    return `picking_shelf_wall_global_layout_settings_v1:${uid || this.user?.uid || 'unknown'}`;
+};
+
+StateManager.prototype._cacheWallGlobalSettings = function (uid, config) {
+    if (!config) return;
+    try {
+        localStorage.setItem(this._getWallGlobalSettingsCacheKey(uid), JSON.stringify({ config, savedAt: Date.now() }));
+    } catch (_) {
+        // localStorage は通信不良時の暫定表示用。保存失敗時もFirestoreへ書き戻さない。
+    }
+};
+
+StateManager.prototype._loadCachedWallGlobalSettings = function (uid) {
+    try {
+        const raw = localStorage.getItem(this._getWallGlobalSettingsCacheKey(uid));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed?.config && typeof parsed.config === 'object' ? parsed.config : null;
+    } catch (_) {
+        return null;
+    }
+};
+
 StateManager.prototype.subscribeToState = function (uid) {
     if (this.unsubscribeState) this.unsubscribeState();
 
@@ -784,6 +810,8 @@ StateManager.prototype.subscribeToState = function (uid) {
         perf?.mark('state.snapshot.start', { uid, currentUserId: this.currentUserId });
         if (doc.exists) {
             const data = doc.data();
+            this.globalLayoutSettingsLoadFailed = false;
+            this._cacheWallGlobalSettings(uid, data?.config || null);
             let approxSize = null;
             try { approxSize = JSON.stringify(data).length; } catch (_) { approxSize = null; }
             this._diag.latestStateSnapshotAt = Date.now();
@@ -828,6 +856,27 @@ StateManager.prototype.subscribeToState = function (uid) {
         });
     }, (error) => {
         this._logFirestoreError('subscribeToState', error, uid);
+        this.globalLayoutSettingsLoadFailed = true;
+        const cachedConfig = this._loadCachedWallGlobalSettings(uid);
+        if (cachedConfig && !this.state) {
+            this.state = {
+                __isOfflineFallbackState: true,
+                mode: 'INJECT',
+                config: cachedConfig,
+                slots: {},
+                splits: {},
+                injectList: {},
+                janIndex: {},
+                progressSummary: { total: 0, completed: 0 },
+                userStates: {
+                    user1: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
+                    user2: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
+                    user3: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null },
+                    user4: { activePick: {}, currentPickingNo: null, injectPending: null, duplicateHighlight: null }
+                }
+            };
+        }
+        if (this.onStateChange && this.state) this.onStateChange(this.state);
     });
 };
 
