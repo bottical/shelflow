@@ -482,6 +482,26 @@
                 <h2 style="margin:0 0 0.25rem 0; font-size:1.15rem;">WALL設定</h2>
 
                 <section class="settings-section" style="border:1px solid var(--border); border-radius:0.75rem; padding:0.75rem;">
+                    <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">よく使う操作</h3>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin:0 0 0.75rem; line-height:1.5;">
+                        全端末・全間口に反映される共通操作です。適用前に確認画面が表示されます。
+                    </p>
+
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">全間口の一括分割数</label>
+                        <select id="settingBulkSplit" style="width:100%; padding:8px; border:1px solid #334155; border-radius:6px; background:#7a9ce7; color:white;">
+                            <option value="">変更しない</option><option value="1">1 分割</option><option value="2">2 分割</option><option value="3">3 分割</option><option value="4">4 分割</option><option value="5">5 分割</option><option value="6">6 分割</option>
+                        </select>
+                        <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px; line-height:1.5;">
+                            ※全間口に同じ分割数をまとめて適用します。<br>
+                            ※縮小できない間口は既存データ保護のため据え置かれます。
+                        </div>
+                    </div>
+
+                    <button id="applyBulkSplitBtn" class="btn btn-primary" style="width:100%; margin-top:1rem;">一括分割を適用</button>
+                </section>
+
+                <section class="settings-section" style="border:1px solid var(--border); border-radius:0.75rem; padding:0.75rem;">
                     <h3 style="margin:0 0 0.5rem 0; font-size:0.95rem;">この端末の表示設定</h3>
                     <p style="font-size:0.75rem; color:var(--text-muted); margin:0 0 0.75rem; line-height:1.5;">
                         このセクションの設定は、この端末のWALL表示だけに保存されます。他の端末には影響しません。
@@ -549,14 +569,6 @@
                         <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); margin-top:0.5rem; display:block;">総間口数 (No.1〜)</label>
                         <input type="number" id="settingBays" min="1" max="100" value="9" style="margin-top:0.25rem;">
                         <div id="settingBaysRiskNotice" class="hidden" style="margin-top:0.5rem; padding:0.75rem; border-radius:0.5rem; font-size:0.85rem; line-height:1.45;"></div>
-                    </div>
-
-                    <div style="margin-top:0.75rem;">
-                        <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">全間口の一括分割数</label>
-                        <select id="settingBulkSplit" style="width:100%; padding:8px; border:1px solid #334155; border-radius:6px; background:#7a9ce7; color:white;">
-                            <option value="">変更しない</option><option value="1">1 分割</option><option value="2">2 分割</option><option value="3">3 分割</option><option value="4">4 分割</option><option value="5">5 分割</option><option value="6">6 分割</option>
-                        </select>
-                        <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">縮小できない間口は既存データ保護のため据え置かれます。</div>
                     </div>
 
                     <div style="margin-top:0.75rem;">

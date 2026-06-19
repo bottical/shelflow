@@ -32,6 +32,7 @@
         const settingDisplayScale = document.getElementById('settingDisplayScale');
         const settingDenseTextMode = document.getElementById('settingDenseTextMode');
         const settingBulkSplit = document.getElementById('settingBulkSplit');
+        const applyBulkSplitBtn = document.getElementById('applyBulkSplitBtn');
         const saveDisplaySettingsBtn = document.getElementById('saveDisplaySettingsBtn');
         const saveAdvancedSettingsBtn = document.getElementById('saveAdvancedSettingsBtn');
         const advancedSettingsDetails = document.getElementById('advancedSettingsDetails');
@@ -70,6 +71,11 @@
         const updateGlobalSettingsLoadWarning = () => {
             const failed = !!stateMgr.globalLayoutSettingsLoadFailed;
             if (globalSettingsLoadWarning) globalSettingsLoadWarning.classList.toggle('hidden', !failed);
+            if (applyBulkSplitBtn) {
+                applyBulkSplitBtn.dataset.globalLoadBlocked = failed ? 'true' : 'false';
+                applyBulkSplitBtn.disabled = failed;
+                applyBulkSplitBtn.textContent = failed ? '通信復帰後に適用してください' : '一括分割を適用';
+            }
             if (saveAdvancedSettingsBtn) {
                 saveAdvancedSettingsBtn.dataset.globalLoadBlocked = failed ? 'true' : 'false';
                 if (failed) {
@@ -280,6 +286,44 @@
             }
         });
 
+        applyBulkSplitBtn.addEventListener('click', async () => {
+            updateGlobalSettingsLoadWarning();
+
+            if (stateMgr.globalLayoutSettingsLoadFailed) {
+                alert('全端末共通のレイアウト設定を取得できないため、一括分割を適用できません。通信復帰後に再読み込みしてください。');
+                return;
+            }
+
+            const bulkSplit = parseInt(settingBulkSplit.value, 10);
+            if (!(bulkSplit >= 1 && bulkSplit <= 6)) {
+                alert('適用する分割数を選択してください。');
+                return;
+            }
+
+            const ok = confirm(
+                `全間口に ${bulkSplit} 分割を適用します。\n\n` +
+                `この操作は全端末のWALL表示に反映されます。\n` +
+                `縮小できない間口は既存データ保護のため据え置かれます。\n\n` +
+                `実行しますか？`
+            );
+
+            if (!ok) return;
+
+            try {
+                const result = await stateMgr.applyBulkSplitCount(bulkSplit);
+                settingBulkSplit.value = '';
+
+                if (result) {
+                    alert(`一括分割設定を適用しました（変更 ${result.changedBays} 間口 / 制約で据え置き ${result.constrainedBays} 間口）`);
+                }
+
+                render(stateMgr.state);
+            } catch (error) {
+                console.error('一括分割設定の適用に失敗しました:', error);
+                alert('一括分割設定の適用に失敗しました。通信状態をご確認ください。');
+            }
+        });
+
         saveAdvancedSettingsBtn.addEventListener('click', async () => {
             updateGlobalSettingsLoadWarning();
             if (stateMgr.globalLayoutSettingsLoadFailed) {
@@ -326,14 +370,6 @@
 
             try {
                 await stateMgr.update({ config: newConfig });
-                const bulkSplit = parseInt(settingBulkSplit.value, 10);
-                if (bulkSplit >= 1 && bulkSplit <= 6) {
-                    const result = await stateMgr.applyBulkSplitCount(bulkSplit);
-                    if (result) {
-                        alert(`一括分割設定を適用しました（変更 ${result.changedBays} 間口 / 制約で据え置き ${result.constrainedBays} 間口）`);
-                    }
-                }
-                settingBulkSplit.value = '';
                 hideSetup();
                 alert('全端末共通のレイアウト設定を保存しました。スマホ・タブレットを含む全WALL画面に反映されます。');
                 currentSingleBayId = null;
